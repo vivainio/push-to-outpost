@@ -1,11 +1,31 @@
 # push-to-outpost
 
-Local push agent for [outpost](https://github.com/vivainio) — pushes tmux
-pane snapshots, Claude Code session transcripts, and ad-hoc docs to a
-remote outpost site over HTTPS. No inbound connections to your machine.
+**outpost** is a remote, read-only viewer for what's happening on your dev
+machine: tmux panes, Claude Code session transcripts, and ad-hoc docs — all
+pushed out over HTTPS so you can check on them from your phone or another
+computer without opening an inbound connection to anything.
 
-Requires an outpost server already deployed and reachable — this package
-is just the CLI that pushes to it.
+This repo is the public half: the local Python agent that captures and
+pushes. The server (a Cloudflare Worker + web UI, gated behind Cloudflare
+Access) is closed-source — this package is just the CLI that pushes to it,
+and requires a server already deployed and reachable.
+
+## Security
+
+- **No inbound connections.** The agent only ever makes outbound HTTPS
+  requests; nothing listens on your machine.
+- **Push auth**: a per-agent API key, stored server-side only as a SHA-256
+  hash. The plaintext secret is shown once at creation and never persisted.
+- **Optional end-to-end encryption** (`outpost set-password`): pane/doc
+  content is encrypted client-side with AES-256-GCM before it's sent, using
+  a key derived from your password via PBKDF2-HMAC-SHA256 (210,000
+  iterations). The password itself is never transmitted or stored anywhere
+  — only the ciphertext reaches the server, and it's decrypted again
+  client-side in the browser. That means even whoever runs the outpost
+  server can't read your session content from the database; they only
+  ever see encrypted bytes.
+- **Site access** is gated by Cloudflare Access (separate from anything
+  in this repo), so the web UI itself requires its own login.
 
 ## Requirements
 
