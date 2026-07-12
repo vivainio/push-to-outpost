@@ -7,8 +7,9 @@ computer without opening an inbound connection to anything.
 
 This repo is the public half: the local Python agent that captures and
 pushes. The server (a Cloudflare Worker + web UI, gated behind Cloudflare
-Access) is closed-source — this package is just the CLI that pushes to it,
-and requires a server already deployed and reachable.
+Access) is closed-source for now — it can be made public if there's
+interest. This package is just the CLI that pushes to it, and requires a
+server already deployed and reachable.
 
 ## Security
 
