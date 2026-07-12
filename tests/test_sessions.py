@@ -72,13 +72,11 @@ class TestTruncate:
 
 class TestRenderMessage:
     def test_string_content(self):
-        assert (
-            sessions._render_message("user", "hello there") == "### \U0001f9d1 User\n\nhello there"
-        )
+        assert sessions._render_message("user", "hello there") == "### \U0001f9d1\n\nhello there"
 
     def test_assistant_string_content_uses_different_heading(self):
         rendered = sessions._render_message("assistant", "hi!")
-        assert rendered.startswith("### \U0001f916 Claude")
+        assert rendered.startswith("### \U0001f916")
 
     def test_blank_string_content_returns_none(self):
         assert sessions._render_message("user", "   ") is None
@@ -89,7 +87,7 @@ class TestRenderMessage:
     def test_list_of_text_blocks(self):
         content = [{"type": "text", "text": "part one"}, {"type": "text", "text": "part two"}]
         rendered = sessions._render_message("user", content)
-        assert rendered == "### \U0001f9d1 User\n\npart one\n\npart two"
+        assert rendered == "### \U0001f9d1\n\npart one\n\npart two"
 
     def test_list_drops_non_text_blocks(self):
         content = [
@@ -97,7 +95,7 @@ class TestRenderMessage:
             {"type": "text", "text": "the actual reply"},
         ]
         rendered = sessions._render_message("assistant", content)
-        assert rendered == "### \U0001f916 Claude\n\nthe actual reply"
+        assert rendered == "### \U0001f916\n\nthe actual reply"
 
     def test_list_with_only_non_text_blocks_returns_none(self):
         content = [{"type": "tool_use", "input": {}}]
@@ -107,6 +105,37 @@ class TestRenderMessage:
         long_text = "y" * (sessions._BLOCK_LIMIT + 50)
         rendered = sessions._render_message("user", long_text)
         assert "truncated" in rendered
+
+    def test_bash_tool_use_renders_command_snippet(self):
+        content = [{"type": "tool_use", "name": "Bash", "input": {"command": "git status -sb"}}]
+        rendered = sessions._render_message("assistant", content)
+        assert rendered == "### \U0001f916\n\n`$ git status -sb`"
+
+    def test_bash_snippet_preserves_order_with_surrounding_text(self):
+        content = [
+            {"type": "text", "text": "Let me check status."},
+            {"type": "tool_use", "name": "Bash", "input": {"command": "git status"}},
+        ]
+        rendered = sessions._render_message("assistant", content)
+        assert rendered == ("### \U0001f916\n\nLet me check status.\n\n`$ git status`")
+
+    def test_bash_snippet_shows_only_first_line(self):
+        content = [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "git status\ngit diff"}}
+        ]
+        rendered = sessions._render_message("assistant", content)
+        assert "`$ git status...`" in rendered
+        assert "git diff" not in rendered
+
+    def test_bash_snippet_truncates_long_first_line(self):
+        long_command = "x" * (sessions._COMMAND_SNIPPET_LIMIT + 50)
+        content = [{"type": "tool_use", "name": "Bash", "input": {"command": long_command}}]
+        rendered = sessions._render_message("assistant", content)
+        assert f"`$ {'x' * sessions._COMMAND_SNIPPET_LIMIT}...`" in rendered
+
+    def test_non_bash_tool_use_still_dropped(self):
+        content = [{"type": "tool_use", "name": "Edit", "input": {"command": "git status"}}]
+        assert sessions._render_message("assistant", content) is None
 
 
 class TestFirstTextBlock:
@@ -153,7 +182,7 @@ class TestRenderSession:
 
     def test_title_falls_back_to_clean_first_user_text(self, tmp_path):
         # Regression test: first_user_text must be the raw message text, not
-        # the rendered "### 🧑 User\n\n..." heading it's wrapped in for the body.
+        # the rendered "### 🧑\n\n..." heading it's wrapped in for the body.
         path = tmp_path / "session.jsonl"
         _write_jsonl(path, [_user_entry("please fix the login bug"), _assistant_entry("done")])
         title, _ = sessions.render_session(path)
@@ -216,6 +245,150 @@ class TestRenderSession:
         _, content = sessions.render_session(path)
         assert "z" * 20 in content
         assert "earlier messages truncated" in content
+
+    def test_skips_skill_expansion_meta_turns(self, tmp_path):
+        # A Skill tool call gets its stub content injected back as a synthetic
+        # "user" turn (isMeta: true) — not something the human typed. It
+        # shouldn't clutter the rendered transcript.
+        path = tmp_path / "session.jsonl"
+        skill_entry = _user_entry(
+            "Base directory for this skill: /home/v/.claude/skills/agent-browser\n"
+            "# agent-browser\n\nFast browser automation CLI...\n\nARGUMENTS: take a screenshot"
+        )
+        skill_entry["isMeta"] = True
+        _write_jsonl(
+            path, [_user_entry("please take a screenshot"), skill_entry, _assistant_entry("done")]
+        )
+        _, content = sessions.render_session(path)
+        assert "Base directory for this skill" not in content
+        assert "please take a screenshot" in content
+
+    def test_meta_turn_does_not_win_title_fallback(self, tmp_path):
+        path = tmp_path / "session.jsonl"
+        skill_entry = _user_entry("Base directory for this skill: /home/v/.claude/skills/foo")
+        skill_entry["isMeta"] = True
+        _write_jsonl(path, [skill_entry, _user_entry("the real first message")])
+        title, _ = sessions.render_session(path)
+        assert title == "the real first message"
+
+
+def _tool_use_entry(role, tool_use_id, name, tool_input):
+    return {
+        "type": role,
+        "message": {
+            "role": role,
+            "content": [{"type": "tool_use", "id": tool_use_id, "name": name, "input": tool_input}],
+        },
+    }
+
+
+def _tool_result_entry(tool_use_id, result_text):
+    return {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": tool_use_id, "content": result_text}
+            ],
+        },
+    }
+
+
+class TestRenderTodos:
+    def test_renders_pending_in_progress_and_completed(self, tmp_path):
+        path = tmp_path / "session.jsonl"
+        _write_jsonl(
+            path,
+            [
+                _tool_use_entry(
+                    "assistant",
+                    "t1",
+                    "TaskCreate",
+                    {"subject": "Fix bug", "activeForm": "Fixing bug"},
+                ),
+                _tool_result_entry("t1", "Task #1 created successfully: Fix bug"),
+                _tool_use_entry(
+                    "assistant",
+                    "t2",
+                    "TaskCreate",
+                    {"subject": "Write tests", "activeForm": "Writing tests"},
+                ),
+                _tool_result_entry("t2", "Task #2 created successfully: Write tests"),
+                _tool_use_entry(
+                    "assistant", "t3", "TaskUpdate", {"taskId": "1", "status": "completed"}
+                ),
+                _tool_result_entry("t3", "Updated task #1 status"),
+                _tool_use_entry(
+                    "assistant",
+                    "t4",
+                    "TaskCreate",
+                    {"subject": "Ship it", "activeForm": "Shipping it"},
+                ),
+                _tool_result_entry("t4", "Task #3 created successfully: Ship it"),
+                _tool_use_entry(
+                    "assistant", "t5", "TaskUpdate", {"taskId": "3", "status": "in_progress"}
+                ),
+                _tool_result_entry("t5", "Updated task #3 status"),
+            ],
+        )
+        _, content = sessions.render_session(path)
+        assert "### \U0001f4cb Tasks" in content
+        assert "- [x] Fix bug" in content
+        assert "- [ ] Write tests" in content
+        assert "- [ ] **Shipping it** _(in progress)_" in content
+
+    def test_omits_deleted_tasks(self, tmp_path):
+        path = tmp_path / "session.jsonl"
+        _write_jsonl(
+            path,
+            [
+                _tool_use_entry(
+                    "assistant", "t1", "TaskCreate", {"subject": "Scrap this", "activeForm": "x"}
+                ),
+                _tool_result_entry("t1", "Task #1 created successfully: Scrap this"),
+                _tool_use_entry(
+                    "assistant", "t2", "TaskUpdate", {"taskId": "1", "status": "deleted"}
+                ),
+                _tool_result_entry("t2", "Updated task #1 status"),
+            ],
+        )
+        _, content = sessions.render_session(path)
+        assert "Tasks" not in content
+        assert "Scrap this" not in content
+
+    def test_no_todo_section_when_no_tasks(self, tmp_path):
+        path = tmp_path / "session.jsonl"
+        _write_jsonl(path, [_user_entry("hi"), _assistant_entry("hello")])
+        _, content = sessions.render_session(path)
+        assert "### \U0001f4cb Tasks" not in content
+
+    def test_only_renders_current_snapshot_not_history(self, tmp_path):
+        # A task flipping pending -> in_progress -> completed should appear
+        # once, in its final state — not as a trail of every intermediate one.
+        path = tmp_path / "session.jsonl"
+        _write_jsonl(
+            path,
+            [
+                _tool_use_entry(
+                    "assistant",
+                    "t1",
+                    "TaskCreate",
+                    {"subject": "Refactor", "activeForm": "Refactoring"},
+                ),
+                _tool_result_entry("t1", "Task #1 created successfully: Refactor"),
+                _tool_use_entry(
+                    "assistant", "t2", "TaskUpdate", {"taskId": "1", "status": "in_progress"}
+                ),
+                _tool_result_entry("t2", "Updated task #1 status"),
+                _tool_use_entry(
+                    "assistant", "t3", "TaskUpdate", {"taskId": "1", "status": "completed"}
+                ),
+                _tool_result_entry("t3", "Updated task #1 status"),
+            ],
+        )
+        _, content = sessions.render_session(path)
+        assert content.count("Refactor") == 1
+        assert "- [x] Refactor" in content
 
 
 class TestContentHash:
