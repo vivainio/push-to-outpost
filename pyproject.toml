@@ -20,7 +20,10 @@ packages = ["outpost"]
 include = ["outpost/**"]
 
 [dependency-groups]
-dev = ["ruff"]
+dev = ["pytest>=8", "ruff"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100

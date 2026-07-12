@@ -7,7 +7,7 @@ import urllib.error
 import webbrowser
 from pathlib import Path
 
-from outpost.agent import fetch_encryption_salt, push_doc, push_once, verify_key
+from outpost.agent import current_pane_id, fetch_encryption_salt, push_doc, push_once, verify_key
 from outpost.config import Config, save_credentials
 from outpost.crypto import derive_key
 from outpost.sessions import push_sessions
@@ -111,11 +111,12 @@ def cmd_push_doc(args: argparse.Namespace) -> None:
 
 def cmd_run(args: argparse.Namespace) -> None:
     config = Config.from_env()
+    self_pane_id = current_pane_id()
     print(f"pushing to {config.tower_url} every {config.push_interval}s (ctrl-c to stop)")
     while True:
         start = time.monotonic()
         try:
-            count = push_once(config)
+            count = push_once(config, exclude_pane_id=self_pane_id)
             session_count = push_sessions(config)
             if count or session_count:
                 print(f"pushed {count} changed window(s), {session_count} changed session(s)")

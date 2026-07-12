@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+import os
 import subprocess
 import urllib.error
 import urllib.request
@@ -19,18 +20,23 @@ class WindowInfo(TypedDict):
 
 
 def list_windows() -> list[WindowInfo]:
-    result = subprocess.run(
-        [
-            "tmux",
-            "list-windows",
-            "-a",
-            "-F",
-            "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{session_attached}",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
+    # tmux is optional — a machine that only pushes docs/session transcripts
+    # (no tmux use at all) shouldn't need it on PATH.
+    try:
+        result = subprocess.run(
+            [
+                "tmux",
+                "list-windows",
+                "-a",
+                "-F",
+                "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{session_attached}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except FileNotFoundError:
+        return []
     if result.returncode != 0:
         return []
     windows: list[WindowInfo] = []
@@ -50,13 +56,41 @@ def list_windows() -> list[WindowInfo]:
 
 def capture(session_name: str, window_index: int, lines: int) -> str:
     target = f"{session_name}:{window_index}"
-    result = subprocess.run(
-        ["tmux", "capture-pane", "-e", "-p", "-t", target, "-S", f"-{lines}"],
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
+    try:
+        result = subprocess.run(
+            ["tmux", "capture-pane", "-e", "-p", "-t", target, "-S", f"-{lines}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except FileNotFoundError:
+        return ""
     return result.stdout if result.returncode == 0 else ""
+
+
+def current_pane_id() -> str | None:
+    """Returns the `session_name:window_index` of the tmux pane this process
+    is running in, or None if it's not running inside tmux at all. Used by
+    `outpost run` to exclude its own pane from what it pushes — resolved via
+    tmux's own `$TMUX_PANE` identity rather than by pattern-matching pane
+    content, which is unreliable (any pane whose scrollback happens to
+    contain the right substring — e.g. from viewing this file's source, or
+    from an unrelated earlier command — would be excluded too)."""
+    tmux_pane = os.environ.get("TMUX_PANE")
+    if not tmux_pane:
+        return None
+    try:
+        result = subprocess.run(
+            ["tmux", "display-message", "-p", "-t", tmux_pane, "#{session_name}:#{window_index}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
 
 
 def _row_hash(window_name: str, window_active: bool, session_attached: bool, content: str) -> str:
@@ -71,7 +105,11 @@ def _row_hash(window_name: str, window_active: bool, session_attached: bool, con
 _last_hashes: dict[str, str] = {}
 
 
-def push_once(config: Config) -> int:
+def push_once(config: Config, exclude_pane_id: str | None = None) -> int:
+    """Captures and pushes all live tmux panes, except `exclude_pane_id` (if
+    given) — used by `outpost run`'s loop to keep its own noisy pane out of
+    the tower. One-shot `outpost push` passes None so it pushes everything,
+    including whatever pane it was run from."""
     if not config.encryption_key:
         raise SystemExit(
             "No encryption password set. Run `outpost set-password` before pushing "
@@ -79,13 +117,6 @@ def push_once(config: Config) -> int:
         )
 
     windows = list_windows()
-
-    # `outpost run` prints this exact banner once at startup, so any pane
-    # currently running it (i.e. still showing the banner in its scrollback
-    # window) can be recognized from its own captured content — no manual
-    # tagging needed to keep a push agent's own noisy log out of the tower.
-    self_signature = f"pushing to {config.tower_url} every "
-
     key = base64.b64decode(config.encryption_key)
 
     live = []
@@ -93,9 +124,9 @@ def push_once(config: Config) -> int:
     changes = []
     for w in windows:
         pane_id = f"{w['session_name']}:{w['window_index']}"
-        content = capture(w["session_name"], w["window_index"], config.capture_lines)
-        if self_signature in content:
+        if pane_id == exclude_pane_id:
             continue
+        content = capture(w["session_name"], w["window_index"], config.capture_lines)
         live.append(pane_id)
         # Hash the plaintext so change detection isn't defeated by encryption's
         # random per-push IV producing a different ciphertext each time.

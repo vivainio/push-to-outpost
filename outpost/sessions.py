@@ -50,6 +50,21 @@ def _truncate(text: str) -> str:
     return text[:_BLOCK_LIMIT] + f"\n...[truncated, {len(text)} chars total]"
 
 
+def _first_text_block(content: object) -> str | None:
+    """Extracts the raw (unheaded) text of a message, for use as a title fallback."""
+    if isinstance(content, str):
+        return content.strip() or None
+    if not isinstance(content, list):
+        return None
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            text = block.get("text", "")
+            if text.strip():
+                parts.append(text)
+    return "\n\n".join(parts) if parts else None
+
+
 def _render_message(role: str, content: object) -> str | None:
     # Only the conversational text is rendered — tool calls, tool results,
     # and edits are dropped. They're what makes a pushed transcript huge and
@@ -110,10 +125,11 @@ def render_session(path: Path) -> tuple[str, str]:
         git_branch = entry.get("gitBranch") or git_branch
         message = entry.get("message") or {}
         role = message.get("role", etype)
-        rendered = _render_message(role, message.get("content"))
+        content = message.get("content")
+        if first_user_text is None and role == "user":
+            first_user_text = _first_text_block(content)
+        rendered = _render_message(role, content)
         if rendered:
-            if first_user_text is None and role == "user":
-                first_user_text = rendered.removeprefix("**User:** ")
             rendered_messages.append(rendered)
 
     title = ai_title or (first_user_text[:60] if first_user_text else path.stem)
