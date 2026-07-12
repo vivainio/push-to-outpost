@@ -27,6 +27,8 @@ server already deployed and reachable.
   ever see encrypted bytes.
 - **Site access** is gated by Cloudflare Access (separate from anything
   in this repo), so the web UI itself requires its own login.
+- **Pushed objects expire after 24 hours** and are deleted server-side;
+  nothing is retained long-term.
 
 ## Requirements
 
