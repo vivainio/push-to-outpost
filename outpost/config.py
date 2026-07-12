@@ -78,7 +78,7 @@ class Config:
             tower_url=creds["tower_url"].rstrip("/"),
             push_secret=creds["push_secret"],
             push_interval=float(os.environ.get("PUSH_INTERVAL", "15")),
-            capture_lines=int(os.environ.get("CAPTURE_LINES", "2000")),
+            capture_lines=int(os.environ.get("CAPTURE_LINES", "500")),
             session_max_age=float(os.environ.get("SESSION_MAX_AGE_MINUTES", "60")) * 60,
             encryption_key=creds.get("encryption_key"),
         )

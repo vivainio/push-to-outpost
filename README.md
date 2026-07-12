@@ -51,7 +51,7 @@ outpost push-doc notes.md   # push a markdown/html/zip file separately from tmux
 outpost set-password        # enable end-to-end encryption (same password entered on the site)
 ```
 
-`PUSH_INTERVAL` (seconds, default 15), `CAPTURE_LINES` (default 2000), and
+`PUSH_INTERVAL` (seconds, default 15), `CAPTURE_LINES` (default 500), and
 `SESSION_MAX_AGE_MINUTES` (default 60) can be set as environment variables
 to override the defaults.
 

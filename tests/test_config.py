@@ -105,14 +105,14 @@ def test_config_from_env_uses_defaults(fake_wincred, monkeypatch):
     assert cfg.tower_url == "https://example.com"  # trailing slash stripped
     assert cfg.push_secret == "secret123"
     assert cfg.push_interval == 15.0
-    assert cfg.capture_lines == 2000
+    assert cfg.capture_lines == 500
     assert cfg.session_max_age == 3600.0
     assert cfg.encryption_key is None
 
 
 def test_config_from_env_respects_overrides(fake_wincred, monkeypatch):
     monkeypatch.setenv("PUSH_INTERVAL", "5")
-    monkeypatch.setenv("CAPTURE_LINES", "500")
+    monkeypatch.setenv("CAPTURE_LINES", "800")
     monkeypatch.setenv("SESSION_MAX_AGE_MINUTES", "2")
     fake_wincred.store[config.WINCRED_TARGET] = json.dumps(
         {
@@ -125,6 +125,6 @@ def test_config_from_env_respects_overrides(fake_wincred, monkeypatch):
     cfg = config.Config.from_env()
 
     assert cfg.push_interval == 5.0
-    assert cfg.capture_lines == 500
+    assert cfg.capture_lines == 800
     assert cfg.session_max_age == 120.0
     assert cfg.encryption_key == "abc=="
