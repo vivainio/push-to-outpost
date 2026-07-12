@@ -57,6 +57,43 @@ class TestDiscoverSessions:
 
         assert sessions.discover_sessions(3600) == []
 
+    def test_skips_old_content_with_a_falsely_recent_mtime(self, tmp_path, monkeypatch):
+        # Regression: a file whose content is old but whose mtime was reset
+        # to "now" (a backup restore, a sync tool touching it, etc.) must not
+        # be resurrected as a recent session.
+        monkeypatch.setattr(sessions, "CLAUDE_PROJECTS_DIR", tmp_path)
+        project_dir = tmp_path / "my-project"
+        project_dir.mkdir()
+
+        stale = project_dir / "stale-session.jsonl"
+        old_ts = "2020-01-01T00:00:00.000Z"
+        entry = {"type": "user", "timestamp": old_ts, "message": {"role": "user", "content": "hi"}}
+        _write_jsonl(stale, [entry])
+        # File was just touched, so mtime looks recent even though its one
+        # message is years old.
+
+        assert sessions.discover_sessions(max_age_seconds=3600) == []
+
+    def test_keeps_recent_content_even_with_stale_looking_timestamp_parse_failure(
+        self, tmp_path, monkeypatch
+    ):
+        # If the timestamp can't be parsed for some reason, fall back to
+        # trusting mtime rather than silently dropping the session.
+        monkeypatch.setattr(sessions, "CLAUDE_PROJECTS_DIR", tmp_path)
+        project_dir = tmp_path / "my-project"
+        project_dir.mkdir()
+
+        path = project_dir / "session.jsonl"
+        entry = {
+            "type": "user",
+            "timestamp": "not-a-timestamp",
+            "message": {"role": "user", "content": "hi"},
+        }
+        _write_jsonl(path, [entry])
+
+        found = sessions.discover_sessions(max_age_seconds=3600)
+        assert [f["session_id"] for f in found] == ["session"]
+
 
 class TestTruncate:
     def test_leaves_short_text_unchanged(self):

@@ -2,6 +2,7 @@ import hashlib
 import json
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import TypedDict
 
@@ -9,6 +10,12 @@ from outpost.agent import push_doc
 from outpost.config import Config
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+
+# How far from the end of a session file to read when looking for its last
+# message timestamp. Every line (user, assistant, even tool/hook attachment
+# lines) carries a top-level "timestamp" field, so a few KB is always enough
+# to find one without reading the whole (possibly huge) transcript.
+_TAIL_SCAN_BYTES = 16_384
 
 # Individual message blocks (a tool result dumping a whole file, say) are
 # truncated to this many characters so one noisy tool call can't blow up the
@@ -45,8 +52,39 @@ class TodoItem(TypedDict):
 _TASK_CREATED_RE = re.compile(r"^Task #(\d+) created successfully:")
 
 
+def _last_entry_time(path: Path) -> float | None:
+    """Best-effort: the timestamp of the last entry in a session transcript,
+    read from the tail of the file rather than the whole thing so this stays
+    cheap even for very long-running sessions."""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as f:
+            if size > _TAIL_SCAN_BYTES:
+                f.seek(-_TAIL_SCAN_BYTES, 2)
+            data = f.read()
+    except OSError:
+        return None
+    for line in reversed(data.decode("utf-8", errors="replace").splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ts = entry.get("timestamp")
+        if not isinstance(ts, str):
+            continue
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+    return None
+
+
 def discover_sessions(max_age_seconds: float) -> list[SessionFile]:
-    """Find Claude Code session transcripts modified within the last `max_age_seconds`."""
+    """Find Claude Code session transcripts with a message within the last
+    `max_age_seconds`."""
     if not CLAUDE_PROJECTS_DIR.is_dir():
         return []
     cutoff = time.time() - max_age_seconds
@@ -56,7 +94,16 @@ def discover_sessions(max_age_seconds: float) -> list[SessionFile]:
             mtime = path.stat().st_mtime
         except OSError:
             continue
+        # Cheap pre-filter: a file untouched since before the cutoff can't
+        # contain anything newer, no need to open it.
         if mtime < cutoff:
+            continue
+        # File mtime alone is unreliable — anything that touches the file
+        # without appending a genuinely new message (a backup restore, a
+        # sync tool, etc.) resets it to "now" and would otherwise resurrect
+        # an old session. Confirm against the last message's own timestamp.
+        last_entry_time = _last_entry_time(path)
+        if last_entry_time is not None and last_entry_time < cutoff:
             continue
         sessions.append({"session_id": path.stem, "path": path, "mtime": mtime})
     return sessions
