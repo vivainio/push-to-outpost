@@ -17,14 +17,15 @@ server already deployed and reachable.
   requests; nothing listens on your machine.
 - **Push auth**: a per-agent API key, stored server-side only as a SHA-256
   hash. The plaintext secret is shown once at creation and never persisted.
-- **Optional end-to-end encryption** (`outpost set-password`): pane/doc
-  content is encrypted client-side with AES-256-GCM before it's sent, using
-  a key derived from your password via PBKDF2-HMAC-SHA256 (210,000
-  iterations). The password itself is never transmitted or stored anywhere
-  — only the ciphertext reaches the server, and it's decrypted again
-  client-side in the browser. That means even whoever runs the outpost
-  server can't read your session content from the database; they only
-  ever see encrypted bytes.
+- **Mandatory end-to-end encryption.** Every push is encrypted client-side
+  with AES-256-GCM before it's sent, using a key derived from a password
+  (`outpost set-password`) via PBKDF2-HMAC-SHA256 (210,000 iterations); the
+  agent refuses to push anything until a password has been set. The
+  password itself is never transmitted or stored anywhere — only the
+  ciphertext reaches the server, and it's decrypted again client-side in
+  the browser. That means even whoever runs the outpost server can't read
+  your session content from the database; they only ever see encrypted
+  bytes.
 - **Site access** is gated by Cloudflare Access (separate from anything
   in this repo), so the web UI itself requires its own login.
 - **Pushed objects expire after 24 hours** and are deleted server-side;
@@ -47,10 +48,10 @@ pip install push-to-outpost
 
 ```
 outpost login              # opens the site, paste in an API key generated there
+outpost set-password        # required before pushing — same password entered on the site
 outpost push                # one-off push
 outpost run                 # loop forever, pushing every 15s
 outpost push-doc notes.md   # push a markdown/html/zip file separately from tmux panes
-outpost set-password        # enable end-to-end encryption (same password entered on the site)
 ```
 
 `PUSH_INTERVAL` (seconds, default 15), `CAPTURE_LINES` (default 500), and
