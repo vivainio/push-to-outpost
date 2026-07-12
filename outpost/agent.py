@@ -20,22 +20,31 @@ class WindowInfo(TypedDict):
 
 def list_windows() -> list[WindowInfo]:
     result = subprocess.run(
-        ["tmux", "list-windows", "-a", "-F",
-         "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{session_attached}"],
-        capture_output=True, text=True, timeout=5,
+        [
+            "tmux",
+            "list-windows",
+            "-a",
+            "-F",
+            "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{session_attached}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
     )
     if result.returncode != 0:
         return []
     windows: list[WindowInfo] = []
     for line in result.stdout.strip().splitlines():
         session_name, window_index, window_name, window_active, session_attached = line.split("\t")
-        windows.append({
-            "session_name": session_name,
-            "window_index": int(window_index),
-            "window_name": window_name,
-            "window_active": window_active == "1",
-            "session_attached": session_attached == "1",
-        })
+        windows.append(
+            {
+                "session_name": session_name,
+                "window_index": int(window_index),
+                "window_name": window_name,
+                "window_active": window_active == "1",
+                "session_attached": session_attached == "1",
+            }
+        )
     return windows
 
 
@@ -43,13 +52,17 @@ def capture(session_name: str, window_index: int, lines: int) -> str:
     target = f"{session_name}:{window_index}"
     result = subprocess.run(
         ["tmux", "capture-pane", "-e", "-p", "-t", target, "-S", f"-{lines}"],
-        capture_output=True, text=True, timeout=5,
+        capture_output=True,
+        text=True,
+        timeout=5,
     )
     return result.stdout if result.returncode == 0 else ""
 
 
 def _row_hash(window_name: str, window_active: bool, session_attached: bool, content: str) -> str:
-    return hashlib.sha256(f"{window_name}\t{window_active}\t{session_attached}\t{content}".encode()).hexdigest()
+    return hashlib.sha256(
+        f"{window_name}\t{window_active}\t{session_attached}\t{content}".encode()
+    ).hexdigest()
 
 
 # Tracks the last-pushed hash per pane so `run`'s loop can skip panes whose
@@ -89,16 +102,18 @@ def push_once(config: Config) -> int:
         row_hash = _row_hash(w["window_name"], w["window_active"], w["session_attached"], content)
         current_hashes[pane_id] = row_hash
         if _last_hashes.get(pane_id) != row_hash:
-            changes.append({
-                "pane_id": pane_id,
-                "session_name": w["session_name"],
-                "window_index": w["window_index"],
-                "window_name": w["window_name"],
-                "window_active": w["window_active"],
-                "session_attached": w["session_attached"],
-                "content": crypto.encrypt(content, key),
-                "encrypted": True,
-            })
+            changes.append(
+                {
+                    "pane_id": pane_id,
+                    "session_name": w["session_name"],
+                    "window_index": w["window_index"],
+                    "window_name": w["window_name"],
+                    "window_active": w["window_active"],
+                    "session_attached": w["session_attached"],
+                    "content": crypto.encrypt(content, key),
+                    "encrypted": True,
+                }
+            )
 
     if not changes and set(current_hashes) == set(_last_hashes):
         return 0  # nothing changed, nothing closed — skip the network call

@@ -30,7 +30,7 @@ def _slugify(text: str) -> str:
 
 def cmd_login(args: argparse.Namespace) -> None:
     tower_url = args.tower_url.rstrip("/")
-    print(f"Opening {tower_url} — sign in, click \"API keys\", then generate one.")
+    print(f'Opening {tower_url} — sign in, click "API keys", then generate one.')
     webbrowser.open(tower_url)
     while True:
         secret = input("Paste the API key here: ").strip()
@@ -38,7 +38,10 @@ def cmd_login(args: argparse.Namespace) -> None:
             print("No key entered, try again (ctrl-c to abort).")
             continue
         if not re.fullmatch(r"[0-9a-fA-F]+", secret):
-            print("That doesn't look like a valid key (unexpected characters) — check your paste and try again.")
+            print(
+                "That doesn't look like a valid key (unexpected characters) "
+                "— check your paste and try again."
+            )
             continue
         print("Verifying key...")
         try:
@@ -89,7 +92,8 @@ def cmd_push_doc(args: argparse.Namespace) -> None:
     doc_format = args.format or FORMAT_BY_SUFFIX.get(path.suffix.lower())
     if not doc_format:
         raise SystemExit(
-            f"Can't infer format from {path.suffix!r} — pass --format {{markdown,html,zip}} explicitly."
+            f"Can't infer format from {path.suffix!r} — "
+            "pass --format {markdown,html,zip} explicitly."
         )
 
     title = args.title or path.name
@@ -134,7 +138,8 @@ def main() -> None:
     login_parser.set_defaults(func=cmd_login)
 
     set_password_parser = sub.add_parser(
-        "set-password", help="Set the shared encryption password (enter the same one on the website)"
+        "set-password",
+        help="Set the shared encryption password (enter the same one on the website)",
     )
     set_password_parser.set_defaults(func=cmd_set_password)
 
@@ -150,7 +155,9 @@ def main() -> None:
     push_doc_parser.add_argument("path", help="Path to a .md, .html, or .zip file")
     push_doc_parser.add_argument("--title", help="Display title (default: filename)")
     push_doc_parser.add_argument(
-        "--format", choices=["markdown", "html", "zip"], help="Override format inferred from the file extension"
+        "--format",
+        choices=["markdown", "html", "zip"],
+        help="Override format inferred from the file extension",
     )
     push_doc_parser.add_argument(
         "--id", help="Stable doc id to upsert on re-push (default: slugified filename)"
