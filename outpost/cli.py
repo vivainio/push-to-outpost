@@ -1,7 +1,9 @@
 import argparse
 import base64
+import os
 import re
 import secrets
+import signal
 import sys
 import time
 import urllib.error
@@ -138,8 +140,58 @@ def cmd_push_doc(args: argparse.Namespace) -> None:
     print(f"pushed doc {doc_id!r} ({doc_format}) to {config.tower_url}")
 
 
+def _other_run_pids(self_pid: int) -> list[int]:
+    pids = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == self_pid:
+            continue
+        try:
+            cmdline = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        tokens = [t for t in cmdline.decode(errors="replace").split("\0") if t]
+        is_outpost = any(t == "outpost" or t.endswith("/outpost") for t in tokens)
+        if is_outpost and "run" in tokens:
+            pids.append(pid)
+    return pids
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _kill_other_instances() -> None:
+    pids = _other_run_pids(os.getpid())
+    if not pids:
+        return
+    for pid in pids:
+        print(f"stopping existing outpost run process (pid {pid})")
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + 3
+    while pids and time.monotonic() < deadline:
+        pids = [pid for pid in pids if _pid_alive(pid)]
+        if pids:
+            time.sleep(0.2)
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     config = Config.from_env()
+    _kill_other_instances()
     self_pane_id = current_pane_id()
     print(f"pushing to {config.tower_url} every {config.push_interval}s (ctrl-c to stop)")
     while True:
