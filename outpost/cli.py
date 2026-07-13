@@ -1,15 +1,18 @@
 import argparse
 import base64
 import re
+import secrets
 import sys
 import time
 import urllib.error
 import webbrowser
 from pathlib import Path
 
+import qrcode
+
 from outpost.agent import current_pane_id, fetch_encryption_salt, push_doc, push_once, verify_key
 from outpost.config import Config, save_credentials
-from outpost.crypto import derive_key
+from outpost.crypto import derive_key, fingerprint
 from outpost.sessions import push_sessions
 
 DEFAULT_TOWER_URL = "https://outpost.vivainio.workers.dev"
@@ -57,24 +60,50 @@ def cmd_login(args: argparse.Namespace) -> None:
     print(f"Saved to {location}. You can now run: outpost run")
 
 
-def cmd_set_password(args: argparse.Namespace) -> None:
-    config = Config.from_env()
+def _fetch_salt(config: Config) -> tuple[str, int]:
     print("Fetching encryption salt...")
     try:
-        salt, iterations = fetch_encryption_salt(config.tower_url, config.push_secret)
+        return fetch_encryption_salt(config.tower_url, config.push_secret)
     except (urllib.error.URLError, OSError) as exc:
         raise SystemExit(f"Couldn't reach the server ({exc}). Try again.")
 
+
+def _apply_password(config: Config, password: str) -> str:
+    salt, iterations = _fetch_salt(config)
+    key = derive_key(password, salt, iterations)
+    encryption_key = base64.b64encode(key).decode()
+    return save_credentials(config.tower_url, config.push_secret, encryption_key=encryption_key)
+
+
+def cmd_set_password(args: argparse.Namespace) -> None:
+    config = Config.from_env()
     while True:
         password = input("Password (same one you'll enter on the website): ").strip()
         if password:
             break
         print("No password entered, try again (ctrl-c to abort).")
 
-    key = derive_key(password, salt, iterations)
-    encryption_key = base64.b64encode(key).decode()
-    location = save_credentials(config.tower_url, config.push_secret, encryption_key=encryption_key)
+    location = _apply_password(config, password)
     print(f"Saved to {location}. Pane content will now be encrypted before it's pushed.")
+
+
+def cmd_qr(args: argparse.Namespace) -> None:
+    config = Config.from_env()
+    # A random password beats a typed one here: it's never entered by hand
+    # anywhere, only ever transferred by scanning the QR code below, so
+    # there's no reason for it to be short or memorable.
+    password = secrets.token_hex(16)
+    location = _apply_password(config, password)
+
+    qr = qrcode.QRCode(border=1)
+    qr.add_data(password)
+    qr.make(fit=True)
+    print()
+    qr.print_ascii(invert=True)
+    print(f"\nFingerprint: {fingerprint(password)}")
+    print(f"New encryption password generated and saved to {location}.")
+    print('Scan this with the website\'s password panel ("Scan QR code") to unlock it there —')
+    print("the fingerprint shown there afterward should match the one above.")
 
 
 def cmd_push(args: argparse.Namespace) -> None:
@@ -143,6 +172,11 @@ def main() -> None:
         help="Set the shared encryption password (enter the same one on the website)",
     )
     set_password_parser.set_defaults(func=cmd_set_password)
+
+    qr_parser = sub.add_parser(
+        "qr", help="Generate a random encryption password, shown as a QR code to scan on the site"
+    )
+    qr_parser.set_defaults(func=cmd_qr)
 
     push_parser = sub.add_parser("push", help="Push a single snapshot and exit")
     push_parser.set_defaults(func=cmd_push)

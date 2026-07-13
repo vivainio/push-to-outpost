@@ -49,6 +49,7 @@ pip install push-to-outpost
 ```
 outpost login              # opens the site, paste in an API key generated there
 outpost set-password        # required before pushing — same password entered on the site
+outpost qr                  # generates a new random password instead, shown as a QR code to scan on the site
 outpost push                # one-off push
 outpost run                 # loop forever, pushing every 15s
 outpost push-doc notes.md   # push a markdown/html/zip file separately from tmux panes

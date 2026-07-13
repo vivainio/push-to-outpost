@@ -3,7 +3,10 @@ name = "push-to-outpost"
 version = "0.1.0"
 description = "Remote viewer for local AI agent sessions, tmux panes, and docs — pushed from your machine, no inbound connections"
 requires-python = ">=3.11"
-dependencies = ["cryptography>=42"]
+dependencies = [
+    "cryptography>=42",
+    "qrcode>=8.2",
+]
 license = { file = "LICENSE" }
 
 [project.scripts]

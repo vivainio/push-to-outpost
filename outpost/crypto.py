@@ -17,3 +17,12 @@ def encrypt(content: str, key: bytes) -> str:
     iv = os.urandom(IV_LENGTH)
     ciphertext = AESGCM(key).encrypt(iv, content.encode(), None)
     return f"{base64.b64encode(iv).decode()}:{base64.b64encode(ciphertext).decode()}"
+
+
+# Short, human-comparable digest of a password — not a security boundary,
+# just something to eyeball against the fingerprint the website shows after
+# scanning a QR code, to confirm it read the intended text. Must match the
+# `fingerprint()` in ui/src/lib/crypto.ts on the website side exactly.
+def fingerprint(password: str) -> str:
+    digest = hashlib.sha256(password.encode()).digest()[:4].hex().upper()
+    return f"{digest[:4]}-{digest[4:]}"

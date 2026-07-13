@@ -102,3 +102,41 @@ class TestCmdPushDoc:
         args = mock_push_doc.call_args[0]
         assert args[1] == "custom-id"
         assert args[2] == "Custom Title"
+
+
+class TestCmdQr:
+    def test_generates_random_password_without_prompting(self, monkeypatch, capsys, fake_config):
+        monkeypatch.setattr(cli.Config, "from_env", classmethod(lambda cls: fake_config))
+        monkeypatch.setattr(cli, "fetch_encryption_salt", lambda url, secret: ("ab" * 16, 210_000))
+        mock_save_credentials = MagicMock(return_value="somewhere")
+        monkeypatch.setattr(cli, "save_credentials", mock_save_credentials)
+        monkeypatch.setattr(
+            cli, "input", MagicMock(side_effect=AssertionError("should not prompt")), raising=False
+        )
+
+        cli.cmd_qr(argparse.Namespace())
+
+        # Saved key must match deriving from whatever random password was generated.
+        saved_key = base64.b64decode(mock_save_credentials.call_args.kwargs["encryption_key"])
+        assert len(saved_key) == 32
+        assert mock_save_credentials.call_args.args[:2] == (
+            fake_config.tower_url,
+            fake_config.push_secret,
+        )
+
+        out = capsys.readouterr().out
+        assert "somewhere" in out
+        assert "Scan this" in out
+
+    def test_generates_a_different_password_each_run(self, monkeypatch, fake_config):
+        monkeypatch.setattr(cli.Config, "from_env", classmethod(lambda cls: fake_config))
+        monkeypatch.setattr(cli, "fetch_encryption_salt", lambda url, secret: ("ab" * 16, 210_000))
+        mock_save_credentials = MagicMock(return_value="somewhere")
+        monkeypatch.setattr(cli, "save_credentials", mock_save_credentials)
+
+        cli.cmd_qr(argparse.Namespace())
+        cli.cmd_qr(argparse.Namespace())
+
+        first_key = mock_save_credentials.call_args_list[0].kwargs["encryption_key"]
+        second_key = mock_save_credentials.call_args_list[1].kwargs["encryption_key"]
+        assert first_key != second_key
