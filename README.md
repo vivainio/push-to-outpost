@@ -1,7 +1,7 @@
 # push-to-outpost
 
 **outpost** is a remote, read-only viewer for what's happening on your dev
-machine: tmux panes, Claude Code session transcripts, and ad-hoc docs — all
+machine: tmux panes, Claude Code and Codex CLI session transcripts, and ad-hoc docs — all
 pushed out over HTTPS so you can check on them from your phone or another
 computer without opening an inbound connection to anything.
 

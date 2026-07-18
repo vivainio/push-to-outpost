@@ -70,6 +70,22 @@ class TestCmdPush:
         mock_push_once.assert_called_once_with(fake_config, responses=["yes", "continue"])
 
 
+class TestCmdRun:
+    def test_writes_dot_without_newline_when_nothing_changed(
+        self, capsys, monkeypatch, fake_config
+    ):
+        monkeypatch.setattr(cli.Config, "from_env", classmethod(lambda cls: fake_config))
+        monkeypatch.setattr(cli, "current_pane_id", lambda: "@0")
+        monkeypatch.setattr(cli, "push_once", lambda *args, **kwargs: PushResult(0, []))
+        monkeypatch.setattr(cli, "push_sessions", lambda config: 0)
+        monkeypatch.setattr(cli.time, "sleep", MagicMock(side_effect=KeyboardInterrupt))
+
+        with pytest.raises(KeyboardInterrupt):
+            cli.cmd_run(argparse.Namespace(responses=""))
+
+        assert capsys.readouterr().out.endswith("(ctrl-c to stop)\n.")
+
+
 class TestCmdPushDoc:
     def test_infers_markdown_format_from_suffix(self, tmp_path, monkeypatch, fake_config):
         path = tmp_path / "notes.md"

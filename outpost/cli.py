@@ -197,7 +197,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                     f"pushed {result.changed} changed window(s), {session_count} changed session(s)"
                 )
             else:
-                print("no changes, skipped")
+                print(".", end="", flush=True)
         except urllib.error.URLError as exc:
             print(f"push failed: {exc}", file=sys.stderr)
         elapsed = time.monotonic() - start

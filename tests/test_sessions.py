@@ -94,6 +94,25 @@ class TestDiscoverSessions:
         found = sessions.discover_sessions(max_age_seconds=3600)
         assert [f["session_id"] for f in found] == ["session"]
 
+    def test_finds_codex_rollouts_and_extracts_session_id(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sessions, "CLAUDE_PROJECTS_DIR", tmp_path / "no-claude")
+        monkeypatch.setattr(sessions, "CODEX_SESSIONS_DIR", tmp_path)
+        day = tmp_path / "2026" / "07" / "18"
+        day.mkdir(parents=True)
+        path = day / "rollout-2026-07-18T12-00-00-12345678-1234-1234-1234-123456789abc.jsonl"
+        _write_jsonl(path, [{"timestamp": "2099-01-01T00:00:00Z", "type": "session_meta"}])
+
+        found = sessions.discover_sessions(3600)
+
+        assert found == [
+            {
+                "session_id": "12345678-1234-1234-1234-123456789abc",
+                "path": path,
+                "mtime": path.stat().st_mtime,
+                "provider": "codex",
+            }
+        ]
+
 
 class TestTruncate:
     def test_leaves_short_text_unchanged(self):
@@ -307,6 +326,56 @@ class TestRenderSession:
         _write_jsonl(path, [skill_entry, _user_entry("the real first message")])
         title, _ = sessions.render_session(path)
         assert title == "the real first message"
+
+
+class TestRenderCodexSession:
+    def test_renders_conversation_and_omits_harness_messages(self, tmp_path):
+        path = tmp_path / "rollout.jsonl"
+        _write_jsonl(
+            path,
+            [
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "session_id": "codex-id",
+                        "cwd": "/work/project",
+                        "git": {"branch": "main"},
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "developer",
+                        "content": [{"type": "input_text", "text": "secret harness instructions"}],
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "fix the widget"}],
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "done"}],
+                    },
+                },
+            ],
+        )
+
+        title, content = sessions.render_codex_session(path)
+
+        assert title == "fix the widget"
+        assert "fix the widget" in content
+        assert "done" in content
+        assert "secret harness instructions" not in content
+        assert "*cwd: `/work/project` · branch: `main`*" in content
 
 
 def _tool_use_entry(role, tool_use_id, name, tool_input):

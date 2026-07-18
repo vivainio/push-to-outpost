@@ -8,8 +8,10 @@ from typing import TypedDict
 
 from outpost.agent import push_doc
 from outpost.config import Config
+from outpost.transcripts import Transcript, TranscriptMessage
 
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+CODEX_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 
 # How far from the end of a session file to read when looking for its last
 # message timestamp. Every line (user, assistant, even tool/hook attachment
@@ -38,6 +40,7 @@ class SessionFile(TypedDict):
     session_id: str
     path: Path
     mtime: float
+    provider: str
 
 
 class TodoItem(TypedDict):
@@ -83,29 +86,48 @@ def _last_entry_time(path: Path) -> float | None:
 
 
 def discover_sessions(max_age_seconds: float) -> list[SessionFile]:
-    """Find Claude Code session transcripts with a message within the last
-    `max_age_seconds`."""
-    if not CLAUDE_PROJECTS_DIR.is_dir():
-        return []
+    """Find Claude Code and Codex CLI transcripts updated recently."""
     cutoff = time.time() - max_age_seconds
     sessions: list[SessionFile] = []
-    for path in CLAUDE_PROJECTS_DIR.glob("*/*.jsonl"):
-        try:
-            mtime = path.stat().st_mtime
-        except OSError:
+    sources = (
+        ("claude", CLAUDE_PROJECTS_DIR, "*/*.jsonl"),
+        ("codex", CODEX_SESSIONS_DIR, "*/*/*/*.jsonl"),
+    )
+    for provider, directory, pattern in sources:
+        if not directory.is_dir():
             continue
-        # Cheap pre-filter: a file untouched since before the cutoff can't
-        # contain anything newer, no need to open it.
-        if mtime < cutoff:
-            continue
-        # File mtime alone is unreliable — anything that touches the file
-        # without appending a genuinely new message (a backup restore, a
-        # sync tool, etc.) resets it to "now" and would otherwise resurrect
-        # an old session. Confirm against the last message's own timestamp.
-        last_entry_time = _last_entry_time(path)
-        if last_entry_time is not None and last_entry_time < cutoff:
-            continue
-        sessions.append({"session_id": path.stem, "path": path, "mtime": mtime})
+        for path in directory.glob(pattern):
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            # Cheap pre-filter: a file untouched since before the cutoff can't
+            # contain anything newer, no need to open it.
+            if mtime < cutoff:
+                continue
+            # Confirm against the transcript timestamp in case another program
+            # merely touched an old file.
+            last_entry_time = _last_entry_time(path)
+            if last_entry_time is not None and last_entry_time < cutoff:
+                continue
+            session_id = path.stem
+            if provider == "codex":
+                # rollout filenames include a date prefix; the trailing UUID is
+                # Codex's stable session id.
+                match = re.search(
+                    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$",
+                    session_id,
+                )
+                if match:
+                    session_id = match.group(1)
+            sessions.append(
+                {
+                    "session_id": session_id,
+                    "path": path,
+                    "mtime": mtime,
+                    "provider": provider,
+                }
+            )
     return sessions
 
 
@@ -253,13 +275,13 @@ def _render_todos(todos: dict[str, TodoItem]) -> str | None:
     return "\n".join(lines)
 
 
-def render_session(path: Path) -> tuple[str, str]:
-    """Renders a session's JSONL transcript to markdown. Returns (title, content)."""
+def parse_claude_session(path: Path) -> Transcript:
+    """Parse a Claude Code JSONL transcript into the common model."""
     cwd = None
     git_branch = None
     ai_title = None
     first_user_text = None
-    rendered_messages: list[str] = []
+    messages: list[TranscriptMessage] = []
     todos: dict[str, TodoItem] = {}
     pending_creates: dict[str, dict] = {}
 
@@ -294,25 +316,105 @@ def render_session(path: Path) -> tuple[str, str]:
             first_user_text = _first_text_block(content)
         rendered = _render_message(role, content)
         if rendered:
-            rendered_messages.append(rendered)
+            messages.append(TranscriptMessage(role=role, text=rendered))
         _update_todos(content, todos, pending_creates)
 
     title = ai_title or (first_user_text[:60] if first_user_text else path.stem)
-    header = f"# {title}\n\n"
-    if cwd:
-        header += f"*cwd: `{cwd}`"
-        if git_branch:
-            header += f" · branch: `{git_branch}`"
-        header += "*\n\n---\n\n"
-
     todo_section = _render_todos(todos)
-    if todo_section:
-        header += todo_section + "\n\n---\n\n"
+    return Transcript(
+        session_id=path.stem,
+        title=title,
+        cwd=cwd,
+        git_branch=git_branch,
+        messages=messages,
+        sections=[todo_section] if todo_section else [],
+    )
 
-    body = "\n\n".join(rendered_messages)
+
+def render_transcript(transcript: Transcript) -> tuple[str, str]:
+    """Render a provider-neutral transcript as Markdown."""
+    header = f"# {transcript.title}\n\n"
+    if transcript.cwd:
+        header += f"*cwd: `{transcript.cwd}`"
+        if transcript.git_branch:
+            header += f" · branch: `{transcript.git_branch}`"
+        header += "*\n\n---\n\n"
+    for section in transcript.sections:
+        header += section + "\n\n---\n\n"
+    body = "\n\n".join(message.text for message in transcript.messages)
     if len(body) > _DOCUMENT_LIMIT:
         body = f"...[earlier messages truncated]\n\n{body[-_DOCUMENT_LIMIT:]}"
-    return title, header + body
+    return transcript.title, header + body
+
+
+def render_session(path: Path) -> tuple[str, str]:
+    return render_transcript(parse_claude_session(path))
+
+
+def _codex_text(content: object) -> str | None:
+    if not isinstance(content, list):
+        return None
+    parts = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") not in ("input_text", "output_text"):
+            continue
+        text = block.get("text")
+        if isinstance(text, str) and text.strip():
+            parts.append(text)
+    return "\n\n".join(parts) if parts else None
+
+
+def parse_codex_session(path: Path) -> Transcript:
+    """Parse a Codex CLI rollout into the common model."""
+    cwd = None
+    git_branch = None
+    session_id = path.stem
+    first_user_text = None
+    messages: list[TranscriptMessage] = []
+
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        payload = entry.get("payload") or {}
+        if entry.get("type") == "session_meta":
+            cwd = payload.get("cwd") or cwd
+            session_id = payload.get("session_id") or payload.get("id") or session_id
+            git = payload.get("git") or {}
+            git_branch = git.get("branch") or git_branch
+            continue
+        if entry.get("type") == "turn_context":
+            cwd = payload.get("cwd") or cwd
+            continue
+        if entry.get("type") != "response_item" or payload.get("type") != "message":
+            continue
+        role = payload.get("role")
+        # Developer/system messages contain the harness instructions, not the
+        # conversation the user wants to see remotely.
+        if role not in ("user", "assistant"):
+            continue
+        text = _codex_text(payload.get("content"))
+        if not text:
+            continue
+        if role == "user" and first_user_text is None:
+            first_user_text = text
+        rendered = _render_message(role, text)
+        if rendered:
+            messages.append(TranscriptMessage(role=role, text=rendered))
+
+    title = first_user_text[:60] if first_user_text else str(session_id)
+    return Transcript(
+        session_id=str(session_id),
+        title=title,
+        cwd=cwd,
+        git_branch=git_branch,
+        messages=messages,
+    )
+
+
+def render_codex_session(path: Path) -> tuple[str, str]:
+    return render_transcript(parse_codex_session(path))
 
 
 def _content_hash(content: str) -> str:
@@ -325,26 +427,38 @@ _last_hashes: dict[str, str] = {}
 
 
 def push_sessions(config: Config) -> int:
-    """Renders and pushes any Claude Code session transcript that changed since
-    the last cycle. Returns the number of sessions pushed."""
+    """Render and push changed Claude Code and Codex CLI transcripts."""
     sessions = discover_sessions(config.session_max_age)
-    current_session_ids = {s["session_id"] for s in sessions}
+    def cache_key(session: SessionFile) -> str:
+        # Keep Claude's existing identifiers stable; namespace Codex to avoid
+        # the unlikely case where both products use the same UUID.
+        if session["provider"] == "claude":
+            return session["session_id"]
+        return f"codex:{session['session_id']}"
+
+    current_session_ids = {cache_key(s) for s in sessions}
     for stale_id in set(_last_hashes) - current_session_ids:
         del _last_hashes[stale_id]
 
     pushed = 0
     for session in sessions:
-        title, content = render_session(session["path"])
+        key = cache_key(session)
+        renderer = render_codex_session if session["provider"] == "codex" else render_session
+        title, content = renderer(session["path"])
         content_hash = _content_hash(content)
-        if _last_hashes.get(session["session_id"]) == content_hash:
+        if _last_hashes.get(key) == content_hash:
             continue
         push_doc(
             config,
-            doc_id=f"session-{session['session_id']}",
+            doc_id=(
+                f"session-{session['session_id']}"
+                if session["provider"] == "claude"
+                else f"session-codex-{session['session_id']}"
+            ),
             title=title,
             doc_format="markdown",
             content=content,
         )
-        _last_hashes[session["session_id"]] = content_hash
+        _last_hashes[key] = content_hash
         pushed += 1
     return pushed
