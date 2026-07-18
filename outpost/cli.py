@@ -23,11 +23,22 @@ DEFAULT_TOWER_URL = "https://outpost.vivainio.workers.dev"
 # Canned responses the web UI can queue up per pane, delivered on the agent's
 # next poll and typed in via tmux send-keys. This is the CLI's own allowlist
 # (advertised to the server, then re-checked against on receipt) — the server
-# never gets to introduce a new one, only pick among these. "1"/"2"/"3" are
-# numbered-menu keypresses sent without a trailing Enter (they take effect
-# immediately); "Tab" is sent as a keypress too, but still followed by Enter
-# (see agent.send_keys / _NO_ENTER_RESPONSES).
-DEFAULT_RESPONSES = ["yes", "continue", "commit and push", "1", "2", "3", "Tab"]
+# never gets to introduce a new one, only pick among these. Single-key canned
+# commands are sent without a trailing Enter (they take effect immediately);
+# "Tab" is sent as a keypress too, but still followed by Enter (see
+# agent.send_keys / _NO_ENTER_RESPONSES).
+DEFAULT_RESPONSES = [
+    "yes",
+    "continue",
+    "commit and push",
+    "1",
+    "2",
+    "3",
+    "y",
+    "p",
+    "esc",
+    "Tab",
+]
 
 
 def _parse_responses(raw: str | None) -> list[str]:
@@ -144,6 +155,8 @@ def cmd_push(args: argparse.Namespace) -> None:
     session_count = push_sessions(config)
     for pane_id, text in result.applied:
         print(f'sent "{text}" to {pane_id}')
+    for pane_id, text, error in result.failed:
+        print(f'failed to send "{text}" to {pane_id}: {error}', file=sys.stderr)
     print(f"pushed {result.changed} window(s) and {session_count} session(s) to {config.tower_url}")
 
 
@@ -196,6 +209,8 @@ def cmd_run(args: argparse.Namespace) -> None:
                 session_count = push_sessions(config)
                 for pane_id, text in result.applied:
                     print(f'sent "{text}" to {pane_id}')
+                for pane_id, text, error in result.failed:
+                    print(f'failed to send "{text}" to {pane_id}: {error}', file=sys.stderr)
                 if result.changed or session_count:
                     print(
                         f"pushed {result.changed} changed window(s), "

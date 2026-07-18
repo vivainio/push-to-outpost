@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from typing import NamedTuple, TypedDict
@@ -78,46 +79,66 @@ def capture(window_id: str, lines: int) -> str:
     return result.stdout if result.returncode == 0 else ""
 
 
-# Numbered menu prompts (e.g. a CLI's "1. Yes  2. Yes and don't ask again
-# 3. No") select their option on the keypress itself — a trailing Enter
+# Menu prompts select these options on the keypress itself — a trailing Enter
 # would advance past whatever the keypress just brought up.
-_NO_ENTER_RESPONSES = {"1", "2", "3"}
+_NO_ENTER_RESPONSES = {"1", "2", "3", "y", "p", "esc"}
+
+# Codex's TUI treats a rapid stream of unbracketed characters as a paste. If
+# Enter immediately follows literal text, it can be absorbed into that paste
+# as a newline instead of submitting the composer. Its Unix detection window
+# is only a few milliseconds; leave a comfortable human-keypress-sized gap.
+_ENTER_DELAY_SECONDS = 0.05
 
 
-def send_keys(pane_id: str, text: str) -> None:
+def send_keys(pane_id: str, text: str) -> str | None:
     """Types `text` into a tmux pane, as if the user had typed it, then
     presses Enter to submit it. `-l` sends it literally so shell/readline
     special characters in a canned response aren't interpreted as key names.
 
-    `"Tab"` is a special case: it's a control keypress (cycling focus,
-    autocomplete), not literal text, so it's sent as a tmux key name instead
-    of `-l` text — a literal "tab" typed as text would not do what the
-    response is meant to do. Enter still follows it, same as any other
-    response.
+    `"Tab"` and `"esc"` are control keypresses, so they're sent as tmux key
+    names instead of `-l` text. Enter still follows Tab, while esc is an
+    immediate keypress and does not need one.
 
     Enter is skipped only for `_NO_ENTER_RESPONSES` — single-keypress menu
-    selections that take effect immediately, unlike Tab."""
+    selections that take effect immediately, unlike Tab.
+
+    Returns None only when every required tmux command succeeded. Otherwise
+    returns an error suitable for reporting to the user."""
+
+    def run_tmux(command: list[str], action: str) -> str | None:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            return None
+        detail = result.stderr.strip()
+        suffix = f": {detail}" if detail else f" (exit {result.returncode})"
+        return f"{action} failed{suffix}"
+
     try:
-        if text == "Tab":
-            subprocess.run(
-                ["tmux", "send-keys", "-t", pane_id, "Tab"],
-                capture_output=True,
-                timeout=5,
+        if text in {"Tab", "esc"}:
+            key = "Escape" if text == "esc" else text
+            error = run_tmux(
+                ["tmux", "send-keys", "-t", pane_id, key],
+                f"sending {key}",
             )
         else:
-            subprocess.run(
+            error = run_tmux(
                 ["tmux", "send-keys", "-l", "-t", pane_id, text],
-                capture_output=True,
-                timeout=5,
+                "sending text",
             )
+        if error:
+            return error
         if text not in _NO_ENTER_RESPONSES:
-            subprocess.run(
+            if text != "Tab":
+                time.sleep(_ENTER_DELAY_SECONDS)
+            return run_tmux(
                 ["tmux", "send-keys", "-t", pane_id, "Enter"],
-                capture_output=True,
-                timeout=5,
+                "sending Enter after text",
             )
+        return None
     except FileNotFoundError:
-        pass
+        return "tmux executable not found"
+    except subprocess.TimeoutExpired:
+        return "tmux send-keys timed out"
 
 
 def current_pane_id() -> str | None:
@@ -162,6 +183,7 @@ _last_hashes: dict[str, str] = {}
 class PushResult(NamedTuple):
     changed: int
     applied: list[tuple[str, str]]
+    failed: list[tuple[str, str, str]] = []
 
 
 def push_once(
@@ -247,16 +269,20 @@ def push_once(
         resp_data = {}  # older server not yet returning JSON here — no commands to act on
 
     applied: list[tuple[str, str]] = []
+    failed: list[tuple[str, str, str]] = []
     if responses:
         allowed = set(responses)
         for pane_id, text in (resp_data.get("commands") or {}).items():
             if pane_id in live and text in allowed:
-                send_keys(pane_id, text)
-                applied.append((pane_id, text))
+                error = send_keys(pane_id, text)
+                if error:
+                    failed.append((pane_id, text, error))
+                else:
+                    applied.append((pane_id, text))
 
     _last_hashes.clear()
     _last_hashes.update(current_hashes)
-    return PushResult(len(changes), applied)
+    return PushResult(len(changes), applied, failed)
 
 
 def verify_key(tower_url: str, push_secret: str) -> bool:
