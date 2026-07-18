@@ -53,6 +53,7 @@ outpost qr                  # generates a new random password instead, shown as 
 outpost push                # one-off push
 outpost run                 # loop forever, pushing every 15s
 outpost push-doc notes.md   # push a markdown/html/zip file separately from tmux panes
+outpost push-doc notes/     # zip a directory on the fly and push it as one doc
 ```
 
 `PUSH_INTERVAL` (seconds, default 15), `CAPTURE_LINES` (default 500), and
