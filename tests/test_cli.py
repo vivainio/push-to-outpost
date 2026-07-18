@@ -1,5 +1,7 @@
 import argparse
 import base64
+import io
+import zipfile
 from unittest.mock import MagicMock
 
 import pytest
@@ -117,6 +119,49 @@ class TestCmdPushDoc:
         monkeypatch.setattr(cli.Config, "from_env", classmethod(lambda cls: fake_config))
         with pytest.raises(SystemExit):
             cli.cmd_push_doc(_push_doc_args(tmp_path / "missing.md"))
+
+    def test_directory_is_zipped_and_pushed(self, tmp_path, monkeypatch, fake_config):
+        vault = tmp_path / "vault"
+        (vault / "sub").mkdir(parents=True)
+        (vault / "a.md").write_text("# a")
+        (vault / "sub" / "b.md").write_text("# b")
+        monkeypatch.setattr(cli.Config, "from_env", classmethod(lambda cls: fake_config))
+        mock_push_doc = MagicMock()
+        monkeypatch.setattr(cli, "push_doc", mock_push_doc)
+
+        cli.cmd_push_doc(_push_doc_args(vault))
+
+        doc_id, title, doc_format, content = mock_push_doc.call_args[0][1:]
+        assert doc_id == "vault"
+        assert title == "vault"
+        assert doc_format == "zip"
+        zf = zipfile.ZipFile(io.BytesIO(base64.b64decode(content)))
+        assert sorted(zf.namelist()) == ["a.md", "sub/b.md"]
+        assert zf.read("a.md") == b"# a"
+
+    def test_directory_skips_git_metadata(self, tmp_path, monkeypatch, fake_config):
+        vault = tmp_path / "vault"
+        (vault / ".git").mkdir(parents=True)
+        (vault / ".git" / "config").write_text("ignored")
+        (vault / "a.md").write_text("# a")
+        monkeypatch.setattr(cli.Config, "from_env", classmethod(lambda cls: fake_config))
+        mock_push_doc = MagicMock()
+        monkeypatch.setattr(cli, "push_doc", mock_push_doc)
+
+        cli.cmd_push_doc(_push_doc_args(vault))
+
+        content = mock_push_doc.call_args[0][4]
+        zf = zipfile.ZipFile(io.BytesIO(base64.b64decode(content)))
+        assert zf.namelist() == ["a.md"]
+
+    def test_directory_rejects_non_zip_format(self, tmp_path, monkeypatch, fake_config):
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "a.md").write_text("# a")
+        monkeypatch.setattr(cli.Config, "from_env", classmethod(lambda cls: fake_config))
+
+        with pytest.raises(SystemExit):
+            cli.cmd_push_doc(_push_doc_args(vault, doc_format="markdown"))
 
     def test_title_and_id_overrides(self, tmp_path, monkeypatch, fake_config):
         path = tmp_path / "notes.md"

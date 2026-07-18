@@ -1,11 +1,13 @@
 import argparse
 import base64
+import io
 import re
 import secrets
 import sys
 import time
 import urllib.error
 import webbrowser
+import zipfile
 from pathlib import Path
 
 import qrcode
@@ -47,6 +49,16 @@ FORMAT_BY_SUFFIX = {
 def _slugify(text: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
     return slug or "doc"
+
+
+def _zip_directory(dir_path: Path) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file_path in sorted(dir_path.rglob("*")):
+            if file_path.is_dir() or ".git" in file_path.relative_to(dir_path).parts:
+                continue
+            zf.write(file_path, file_path.relative_to(dir_path).as_posix())
+    return buf.getvalue()
 
 
 def cmd_login(args: argparse.Namespace) -> None:
@@ -136,23 +148,30 @@ def cmd_push(args: argparse.Namespace) -> None:
 
 def cmd_push_doc(args: argparse.Namespace) -> None:
     path = Path(args.path)
-    if not path.is_file():
-        raise SystemExit(f"No such file: {path}")
+    if not path.exists():
+        raise SystemExit(f"No such file or directory: {path}")
 
-    doc_format = args.format or FORMAT_BY_SUFFIX.get(path.suffix.lower())
-    if not doc_format:
-        raise SystemExit(
-            f"Can't infer format from {path.suffix!r} — "
-            "pass --format {markdown,html,zip} explicitly."
-        )
+    if path.is_dir():
+        if args.format and args.format != "zip":
+            raise SystemExit(
+                f"Can't push a directory as {args.format!r} — directories are always zipped."
+            )
+        doc_format = "zip"
+        content = base64.b64encode(_zip_directory(path)).decode()
+    else:
+        doc_format = args.format or FORMAT_BY_SUFFIX.get(path.suffix.lower())
+        if not doc_format:
+            raise SystemExit(
+                f"Can't infer format from {path.suffix!r} — "
+                "pass --format {markdown,html,zip} explicitly."
+            )
+        if doc_format == "zip":
+            content = base64.b64encode(path.read_bytes()).decode()
+        else:
+            content = path.read_text(encoding="utf-8")
 
     title = args.title or path.name
     doc_id = args.id or _slugify(path.stem)
-
-    if doc_format == "zip":
-        content = base64.b64encode(path.read_bytes()).decode()
-    else:
-        content = path.read_text(encoding="utf-8")
 
     config = Config.from_env()
     push_doc(config, doc_id, title, doc_format, content)
@@ -222,7 +241,9 @@ def main() -> None:
     push_doc_parser = sub.add_parser(
         "push-doc", help="Push a markdown/html/zip file, rendered separately from tmux sessions"
     )
-    push_doc_parser.add_argument("path", help="Path to a .md, .html, or .zip file")
+    push_doc_parser.add_argument(
+        "path", help="Path to a .md, .html, or .zip file, or a directory to zip up and push"
+    )
     push_doc_parser.add_argument("--title", help="Display title (default: filename)")
     push_doc_parser.add_argument(
         "--format",
