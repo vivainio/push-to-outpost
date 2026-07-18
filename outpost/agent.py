@@ -68,6 +68,25 @@ def capture(session_name: str, window_index: int, lines: int) -> str:
     return result.stdout if result.returncode == 0 else ""
 
 
+def send_keys(pane_id: str, text: str) -> None:
+    """Types `text` into a tmux pane followed by Enter, as if the user had
+    typed it. `-l` sends it literally so shell/readline special characters in
+    a canned response aren't interpreted as key names."""
+    try:
+        subprocess.run(
+            ["tmux", "send-keys", "-l", "-t", pane_id, text],
+            capture_output=True,
+            timeout=5,
+        )
+        subprocess.run(
+            ["tmux", "send-keys", "-t", pane_id, "Enter"],
+            capture_output=True,
+            timeout=5,
+        )
+    except FileNotFoundError:
+        pass
+
+
 def current_pane_id() -> str | None:
     """Returns the `session_name:window_index` of the tmux pane this process
     is running in, or None if it's not running inside tmux at all. Used by
@@ -105,11 +124,20 @@ def _row_hash(window_name: str, window_active: bool, session_attached: bool, con
 _last_hashes: dict[str, str] = {}
 
 
-def push_once(config: Config, exclude_pane_id: str | None = None) -> int:
+def push_once(
+    config: Config, exclude_pane_id: str | None = None, responses: list[str] | None = None
+) -> int:
     """Captures and pushes all live tmux panes, except `exclude_pane_id` (if
     given) — used by `outpost run`'s loop to keep its own noisy pane out of
     the tower. One-shot `outpost push` passes None so it pushes everything,
-    including whatever pane it was run from."""
+    including whatever pane it was run from.
+
+    `responses` is the CLI's own allowlist of canned strings (e.g. "yes",
+    "continue") the web UI is allowed to queue up for a pane — advertised to
+    the server so it knows what buttons to show, and re-checked against
+    here. That local re-check is what actually enforces the allowlist: even
+    a compromised server response can't make this agent type something the
+    CLI wasn't configured to accept."""
     if not config.encryption_key:
         raise SystemExit(
             "No encryption password set. Run `outpost set-password` before pushing "
@@ -146,12 +174,20 @@ def push_once(config: Config, exclude_pane_id: str | None = None) -> int:
                 }
             )
 
-    if not changes and set(current_hashes) == set(_last_hashes):
+    # When canned responses are enabled, the push is also how the agent polls
+    # for queued commands — so it can't be skipped just because pane content
+    # is unchanged (that's exactly the state a pending "yes"/"continue" is
+    # meant to unstick).
+    if not changes and not responses and set(current_hashes) == set(_last_hashes):
         return 0  # nothing changed, nothing closed — skip the network call
+
+    body: dict = {"op": "push-tmux", "live": live, "changes": changes}
+    if responses:
+        body["responses"] = responses
 
     req = urllib.request.Request(
         f"{config.tower_url}/api/push",
-        data=json.dumps({"op": "push-tmux", "live": live, "changes": changes}).encode("utf-8"),
+        data=json.dumps(body).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {config.push_secret}",
             "Content-Type": "application/json",
@@ -160,7 +196,17 @@ def push_once(config: Config, exclude_pane_id: str | None = None) -> int:
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
-        resp.read()
+        raw = resp.read()
+    try:
+        resp_data = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        resp_data = {}  # older server not yet returning JSON here — no commands to act on
+
+    if responses:
+        allowed = set(responses)
+        for pane_id, text in (resp_data.get("commands") or {}).items():
+            if pane_id in live and text in allowed:
+                send_keys(pane_id, text)
 
     _last_hashes.clear()
     _last_hashes.update(current_hashes)

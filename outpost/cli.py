@@ -17,6 +17,21 @@ from outpost.sessions import push_sessions
 
 DEFAULT_TOWER_URL = "https://outpost.vivainio.workers.dev"
 
+# Canned responses the web UI can queue up per pane, delivered on the agent's
+# next poll and typed in via tmux send-keys. This is the CLI's own allowlist
+# (advertised to the server, then re-checked against on receipt) — the server
+# never gets to introduce a new one, only pick among these.
+DEFAULT_RESPONSES = ["yes", "continue", "commit and push"]
+
+
+def _parse_responses(raw: str | None) -> list[str]:
+    if raw is None:
+        return list(DEFAULT_RESPONSES)
+    if not raw.strip():
+        return []  # explicit empty string disables the feature
+    return [r.strip() for r in raw.split(",") if r.strip()]
+
+
 FORMAT_BY_SUFFIX = {
     ".md": "markdown",
     ".markdown": "markdown",
@@ -108,7 +123,8 @@ def cmd_qr(args: argparse.Namespace) -> None:
 
 def cmd_push(args: argparse.Namespace) -> None:
     config = Config.from_env()
-    count = push_once(config)
+    responses = _parse_responses(args.responses)
+    count = push_once(config, responses=responses)
     session_count = push_sessions(config)
     print(f"pushed {count} window(s) and {session_count} session(s) to {config.tower_url}")
 
@@ -141,11 +157,14 @@ def cmd_push_doc(args: argparse.Namespace) -> None:
 def cmd_run(args: argparse.Namespace) -> None:
     config = Config.from_env()
     self_pane_id = current_pane_id()
+    responses = _parse_responses(args.responses)
     print(f"pushing to {config.tower_url} every {config.push_interval}s (ctrl-c to stop)")
+    if responses:
+        print(f"canned responses enabled: {', '.join(responses)}")
     while True:
         start = time.monotonic()
         try:
-            count = push_once(config, exclude_pane_id=self_pane_id)
+            count = push_once(config, exclude_pane_id=self_pane_id, responses=responses)
             session_count = push_sessions(config)
             if count or session_count:
                 print(f"pushed {count} changed window(s), {session_count} changed session(s)")
@@ -178,10 +197,17 @@ def main() -> None:
     )
     qr_parser.set_defaults(func=cmd_qr)
 
+    responses_help = (
+        "Comma-separated canned responses the web UI can send back to a pane "
+        f'(default: "{", ".join(DEFAULT_RESPONSES)}"; pass "" to disable)'
+    )
+
     push_parser = sub.add_parser("push", help="Push a single snapshot and exit")
+    push_parser.add_argument("--responses", default=None, help=responses_help)
     push_parser.set_defaults(func=cmd_push)
 
     run_parser = sub.add_parser("run", help="Push snapshots on a loop until stopped")
+    run_parser.add_argument("--responses", default=None, help=responses_help)
     run_parser.set_defaults(func=cmd_run)
 
     push_doc_parser = sub.add_parser(

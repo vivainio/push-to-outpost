@@ -59,6 +59,12 @@ outpost push-doc notes.md   # push a markdown/html/zip file separately from tmux
 `SESSION_MAX_AGE_MINUTES` (default 60) can be set as environment variables
 to override the defaults.
 
+`outpost run --responses "yes,continue,commit and push"` advertises a fixed
+set of canned replies the web UI can send back to a pane (defaults to that
+same list if the flag is omitted; pass `--responses ""` to disable). The
+agent only ever types a response into a pane if it's a member of this list —
+even a compromised server can't make it send anything else.
+
 ## License
 
 MIT
