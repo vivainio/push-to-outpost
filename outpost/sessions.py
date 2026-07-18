@@ -54,6 +54,18 @@ class TodoItem(TypedDict):
 # has to be staged until that result line arrives.
 _TASK_CREATED_RE = re.compile(r"^Task #(\d+) created successfully:")
 
+# Codex records some harness context as user-role messages. These are not
+# prompts typed by the user and must not become session titles or visible
+# transcript turns.
+_CODEX_ENVIRONMENT_CONTEXT_RE = re.compile(
+    r"<environment_context\b[^>]*>.*?</environment_context>", re.DOTALL
+)
+_CODEX_AGENTS_INSTRUCTIONS_RE = re.compile(
+    r"# AGENTS\.md instructions for [^\n]+\s*"
+    r"<INSTRUCTIONS\b[^>]*>.*?</INSTRUCTIONS>",
+    re.DOTALL,
+)
+
 
 def _last_entry_time(path: Path) -> float | None:
     """Best-effort: the timestamp of the last entry in a session transcript,
@@ -364,6 +376,13 @@ def _codex_text(content: object) -> str | None:
     return "\n\n".join(parts) if parts else None
 
 
+def _clean_codex_user_text(text: str) -> str | None:
+    """Remove harness context that Codex serializes with the user role."""
+    text = _CODEX_AGENTS_INSTRUCTIONS_RE.sub("", text)
+    text = _CODEX_ENVIRONMENT_CONTEXT_RE.sub("", text)
+    return text.strip() or None
+
+
 def parse_codex_session(path: Path) -> Transcript:
     """Parse a Codex CLI rollout into the common model."""
     cwd = None
@@ -397,6 +416,10 @@ def parse_codex_session(path: Path) -> Transcript:
         text = _codex_text(payload.get("content"))
         if not text:
             continue
+        if role == "user":
+            text = _clean_codex_user_text(text)
+            if not text:
+                continue
         if role == "user" and first_user_text is None:
             first_user_text = text
         rendered = _render_message(role, text)
@@ -429,6 +452,7 @@ _last_hashes: dict[str, str] = {}
 def push_sessions(config: Config) -> int:
     """Render and push changed Claude Code and Codex CLI transcripts."""
     sessions = discover_sessions(config.session_max_age)
+
     def cache_key(session: SessionFile) -> str:
         # Keep Claude's existing identifiers stable; namespace Codex to avoid
         # the unlikely case where both products use the same UUID.

@@ -377,6 +377,83 @@ class TestRenderCodexSession:
         assert "secret harness instructions" not in content
         assert "*cwd: `/work/project` · branch: `main`*" in content
 
+    def test_omits_environment_context_and_titles_from_first_real_prompt(self, tmp_path):
+        path = tmp_path / "rollout.jsonl"
+        _write_jsonl(
+            path,
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": (
+                                    "<environment_context>\n"
+                                    "  <cwd>/work/project</cwd>\n"
+                                    "  <shell>bash</shell>\n"
+                                    "</environment_context>"
+                                ),
+                            }
+                        ],
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "fix the real problem"}],
+                    },
+                },
+            ],
+        )
+
+        title, content = sessions.render_codex_session(path)
+
+        assert title == "fix the real problem"
+        assert "environment_context" not in content
+        assert "<cwd>" not in content
+
+    def test_strips_injected_agents_instructions_from_mixed_user_turn(self, tmp_path):
+        path = tmp_path / "rollout.jsonl"
+        _write_jsonl(
+            path,
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": (
+                                    "# AGENTS.md instructions for /work/project\n\n"
+                                    "<INSTRUCTIONS>\n"
+                                    "Always use the project test runner.\n"
+                                    "</INSTRUCTIONS>\n"
+                                    "<environment_context>\n"
+                                    "  <cwd>/work/project</cwd>\n"
+                                    "</environment_context>\n"
+                                    "fix the real problem"
+                                ),
+                            }
+                        ],
+                    },
+                }
+            ],
+        )
+
+        title, content = sessions.render_codex_session(path)
+
+        assert title == "fix the real problem"
+        assert "AGENTS.md instructions" not in content
+        assert "Always use the project test runner" not in content
+        assert "environment_context" not in content
+
 
 def _tool_use_entry(role, tool_use_id, name, tool_input):
     return {
