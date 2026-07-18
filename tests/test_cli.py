@@ -106,6 +106,56 @@ class TestCmdRun:
 
         assert "stopped previous outpost run (pid 1234)" in capsys.readouterr().out
 
+    def test_fast_polls_after_delivering_canned_response(self, monkeypatch, fake_config):
+        monkeypatch.setattr(cli.Config, "from_env", classmethod(lambda cls: fake_config))
+        monkeypatch.setattr(cli, "current_pane_id", lambda: "@0")
+        monkeypatch.setattr(cli, "exclusive_run", lambda: nullcontext())
+        results = iter(
+            [
+                PushResult(0, [("@1", "yes")]),
+                PushResult(1, []),
+                PushResult(0, []),
+                PushResult(0, []),
+                PushResult(0, []),
+                PushResult(0, []),
+            ]
+        )
+        monkeypatch.setattr(cli, "push_once", lambda *args, **kwargs: next(results))
+        monkeypatch.setattr(cli, "push_sessions", lambda config, **kwargs: 0)
+        monkeypatch.setattr(cli.time, "monotonic", lambda: 0.0)
+        sleep = MagicMock(side_effect=[None, None, None, None, None, KeyboardInterrupt])
+        monkeypatch.setattr(cli.time, "sleep", sleep)
+
+        with pytest.raises(KeyboardInterrupt):
+            cli.cmd_run(argparse.Namespace(responses="yes"))
+
+        assert [call.args[0] for call in sleep.call_args_list] == [
+            1.0,
+            5.0,
+            5.0,
+            5.0,
+            5.0,
+            fake_config.push_interval,
+        ]
+
+    def test_fast_poll_never_slows_a_short_normal_interval(self, monkeypatch, fake_config):
+        fake_config.push_interval = 0.5
+        monkeypatch.setattr(cli.Config, "from_env", classmethod(lambda cls: fake_config))
+        monkeypatch.setattr(cli, "current_pane_id", lambda: "@0")
+        monkeypatch.setattr(cli, "exclusive_run", lambda: nullcontext())
+        monkeypatch.setattr(
+            cli, "push_once", lambda *args, **kwargs: PushResult(0, [("@1", "yes")])
+        )
+        monkeypatch.setattr(cli, "push_sessions", lambda config, **kwargs: 0)
+        monkeypatch.setattr(cli.time, "monotonic", lambda: 0.0)
+        sleep = MagicMock(side_effect=KeyboardInterrupt)
+        monkeypatch.setattr(cli.time, "sleep", sleep)
+
+        with pytest.raises(KeyboardInterrupt):
+            cli.cmd_run(argparse.Namespace(responses="yes"))
+
+        sleep.assert_called_once_with(0.5)
+
 
 class TestCmdPushDoc:
     def test_infers_markdown_format_from_suffix(self, tmp_path, monkeypatch, fake_config):

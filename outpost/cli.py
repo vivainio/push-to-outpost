@@ -8,6 +8,7 @@ import time
 import urllib.error
 import webbrowser
 import zipfile
+from collections import deque
 from pathlib import Path
 
 import qrcode
@@ -39,6 +40,12 @@ DEFAULT_RESPONSES = [
     "esc",
     "Tab",
 ]
+
+# A canned response usually wakes an agent that was blocked on a prompt. Push
+# its resulting output promptly, then keep a short watch while it gets moving.
+# push_once still captures all panes, but its hashes ensure only changed panes
+# are included in the request.
+FAST_POLL_DELAYS = (1.0, 5.0, 5.0, 5.0, 5.0)
 
 
 def _parse_responses(raw: str | None) -> list[str]:
@@ -198,6 +205,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     self_pane_id = current_pane_id()
     responses = _parse_responses(args.responses)
     verbose = getattr(args, "verbose", False)
+    fast_poll_delays: deque[float] = deque()
     with exclusive_run() as replaced_pid:
         if replaced_pid is not None:
             print(f"stopped previous outpost run (pid {replaced_pid})")
@@ -216,6 +224,11 @@ def cmd_run(args: argparse.Namespace) -> None:
                 session_count = push_sessions(config, verbose=verbose)
                 for pane_id, text in result.applied:
                     print(f'sent "{text}" to {pane_id}')
+                if result.applied:
+                    # Restart the whole watch period when another response is
+                    # delivered, including if it arrives during fast mode.
+                    fast_poll_delays.clear()
+                    fast_poll_delays.extend(FAST_POLL_DELAYS)
                 for pane_id, text, error in result.failed:
                     print(f'failed to send "{text}" to {pane_id}: {error}', file=sys.stderr)
                 if result.changed or session_count:
@@ -228,7 +241,12 @@ def cmd_run(args: argparse.Namespace) -> None:
             except urllib.error.URLError as exc:
                 print(f"push failed: {exc}", file=sys.stderr)
             elapsed = time.monotonic() - start
-            time.sleep(max(0.0, config.push_interval - elapsed))
+            interval = (
+                min(config.push_interval, fast_poll_delays.popleft())
+                if fast_poll_delays
+                else config.push_interval
+            )
+            time.sleep(max(0.0, interval - elapsed))
 
 
 def main() -> None:

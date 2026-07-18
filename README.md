@@ -75,7 +75,10 @@ Enter (they take effect immediately); `esc` sends Escape without Enter.
 `Tab` is sent as an actual keypress rather than typed out literally, still
 followed by Enter. Every
 applied response is printed (`sent "1" to @3`) so
-it's visible whether one was actually delivered.
+it's visible whether one was actually delivered. After delivery, `outpost
+run` briefly switches to a faster polling cadence (once after 1 second, then
+four times at 5-second intervals) so the pane's resulting output reaches the
+viewer promptly before normal polling resumes.
 
 ## License
 
