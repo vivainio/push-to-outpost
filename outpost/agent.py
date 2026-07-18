@@ -79,15 +79,15 @@ def capture(window_id: str, lines: int) -> str:
 
 
 def send_keys(pane_id: str, text: str) -> None:
-    """Types `text` into a tmux pane as if the user had typed it. `-l` sends
-    it literally so shell/readline special characters in a canned response
-    aren't interpreted as key names.
+    """Types `text` into a tmux pane followed by Enter, as if the user had
+    typed it. `-l` sends it literally so shell/readline special characters in
+    a canned response aren't interpreted as key names.
 
     `"Tab"` is a special case: it's a control keypress (cycling a menu,
-    autocomplete), not literal text to submit, so it's sent as a tmux key
-    name instead of `-l` text and isn't followed by Enter — a literal "tab"
-    typed as text, or a stray Enter after the real keypress, would not do
-    what the response is meant to do."""
+    autocomplete), not literal text, so it's sent as a tmux key name instead
+    of `-l` text — a literal "tab" typed as text would not do what the
+    response is meant to do. Enter still follows it, same as any other
+    response."""
     try:
         if text == "Tab":
             subprocess.run(
@@ -95,12 +95,12 @@ def send_keys(pane_id: str, text: str) -> None:
                 capture_output=True,
                 timeout=5,
             )
-            return
-        subprocess.run(
-            ["tmux", "send-keys", "-l", "-t", pane_id, text],
-            capture_output=True,
-            timeout=5,
-        )
+        else:
+            subprocess.run(
+                ["tmux", "send-keys", "-l", "-t", pane_id, text],
+                capture_output=True,
+                timeout=5,
+            )
         subprocess.run(
             ["tmux", "send-keys", "-t", pane_id, "Enter"],
             capture_output=True,

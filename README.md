@@ -64,8 +64,9 @@ set of canned replies the web UI can send back to a pane (defaults to
 `yes,continue,commit and push,1,2,3,Tab` if the flag is omitted; pass
 `--responses ""` to disable). The agent only ever types a response into a
 pane if it's a member of this list — even a compromised server can't make it
-send anything else. `Tab` is sent as an actual keypress rather than being
-typed out literally. Every applied response is printed (`sent "1" to @3`) so
+send anything else. `Tab` is sent as an actual keypress (followed by Enter,
+same as any other response) rather than being typed out literally. Every
+applied response is printed (`sent "1" to @3`) so
 it's visible whether one was actually delivered.
 
 ## License

@@ -155,7 +155,7 @@ class TestSendKeys:
         monkeypatch.setattr(agent.subprocess, "run", raise_not_found)
         agent.send_keys("main:0", "yes")  # must not raise
 
-    def test_sends_tab_as_a_keypress_without_enter(self, monkeypatch):
+    def test_sends_tab_as_a_keypress_then_enter(self, monkeypatch):
         calls = []
         monkeypatch.setattr(
             agent.subprocess,
@@ -163,7 +163,10 @@ class TestSendKeys:
             lambda cmd, **k: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0),
         )
         agent.send_keys("main:0", "Tab")
-        assert calls == [["tmux", "send-keys", "-t", "main:0", "Tab"]]
+        assert calls == [
+            ["tmux", "send-keys", "-t", "main:0", "Tab"],
+            ["tmux", "send-keys", "-t", "main:0", "Enter"],
+        ]
 
 
 class TestRowHash:
