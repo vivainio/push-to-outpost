@@ -132,6 +132,28 @@ class TestCurrentPaneId:
         assert agent.current_pane_id() is None
 
 
+class TestSendKeys:
+    def test_sends_literal_text_then_enter(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            agent.subprocess,
+            "run",
+            lambda cmd, **k: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0),
+        )
+        agent.send_keys("main:0", "commit and push")
+        assert calls == [
+            ["tmux", "send-keys", "-l", "-t", "main:0", "commit and push"],
+            ["tmux", "send-keys", "-t", "main:0", "Enter"],
+        ]
+
+    def test_silently_ignores_missing_tmux(self, monkeypatch):
+        def raise_not_found(*a, **k):
+            raise FileNotFoundError("tmux")
+
+        monkeypatch.setattr(agent.subprocess, "run", raise_not_found)
+        agent.send_keys("main:0", "yes")  # must not raise
+
+
 class TestRowHash:
     def test_deterministic(self):
         h1 = agent._row_hash("editor", True, True, "content")
@@ -289,6 +311,114 @@ class TestPushOnce:
         # identical the whole request is skipped (no new network call).
         assert second == 0
         assert mock_urlopen.call_count == second_call_count_before
+
+    def test_includes_responses_in_payload(self, monkeypatch, fake_config):
+        monkeypatch.setattr(agent, "list_windows", lambda: [])
+        mock_urlopen = _mock_urlopen()
+        monkeypatch.setattr(agent.urllib.request, "urlopen", mock_urlopen)
+
+        agent.push_once(fake_config, responses=["yes", "continue"])
+
+        request = mock_urlopen.call_args[0][0]
+        body = json.loads(request.data)
+        assert body["responses"] == ["yes", "continue"]
+
+    def test_does_not_skip_network_call_when_responses_enabled(self, monkeypatch, fake_config):
+        # Otherwise a quiet pane (sitting at a prompt, unchanged) would never
+        # be polled for a queued command.
+        monkeypatch.setattr(agent, "list_windows", lambda: [])
+        mock_urlopen = _mock_urlopen()
+        monkeypatch.setattr(agent.urllib.request, "urlopen", mock_urlopen)
+
+        agent.push_once(fake_config, responses=["yes"])
+
+        mock_urlopen.assert_called_once()
+
+    def test_sends_keys_for_allowed_queued_command(self, monkeypatch, fake_config):
+        monkeypatch.setattr(
+            agent,
+            "list_windows",
+            lambda: [
+                {
+                    "session_name": "main",
+                    "window_index": 0,
+                    "window_name": "editor",
+                    "window_active": True,
+                    "session_attached": True,
+                }
+            ],
+        )
+        monkeypatch.setattr(agent, "capture", lambda *a, **k: "some output")
+        response = json.dumps({"commands": {"main:0": "yes"}}).encode()
+        monkeypatch.setattr(agent.urllib.request, "urlopen", _mock_urlopen(response_body=response))
+        sent = []
+        monkeypatch.setattr(agent, "send_keys", lambda pane_id, text: sent.append((pane_id, text)))
+
+        agent.push_once(fake_config, responses=["yes", "continue"])
+
+        assert sent == [("main:0", "yes")]
+
+    def test_ignores_queued_command_not_in_allowlist(self, monkeypatch, fake_config):
+        # Local re-check: even if the server (or a compromised UI/request)
+        # returns something outside the CLI's own configured set, it must
+        # never be typed into a pane.
+        monkeypatch.setattr(
+            agent,
+            "list_windows",
+            lambda: [
+                {
+                    "session_name": "main",
+                    "window_index": 0,
+                    "window_name": "editor",
+                    "window_active": True,
+                    "session_attached": True,
+                }
+            ],
+        )
+        monkeypatch.setattr(agent, "capture", lambda *a, **k: "some output")
+        response = json.dumps({"commands": {"main:0": "rm -rf /"}}).encode()
+        monkeypatch.setattr(agent.urllib.request, "urlopen", _mock_urlopen(response_body=response))
+        sent = []
+        monkeypatch.setattr(agent, "send_keys", lambda pane_id, text: sent.append((pane_id, text)))
+
+        agent.push_once(fake_config, responses=["yes", "continue"])
+
+        assert sent == []
+
+    def test_ignores_queued_command_for_pane_no_longer_live(self, monkeypatch, fake_config):
+        monkeypatch.setattr(agent, "list_windows", lambda: [])
+        response = json.dumps({"commands": {"main:0": "yes"}}).encode()
+        monkeypatch.setattr(agent.urllib.request, "urlopen", _mock_urlopen(response_body=response))
+        sent = []
+        monkeypatch.setattr(agent, "send_keys", lambda pane_id, text: sent.append((pane_id, text)))
+
+        agent.push_once(fake_config, responses=["yes"])
+
+        assert sent == []
+
+    def test_ignores_commands_when_responses_not_enabled(self, monkeypatch, fake_config):
+        monkeypatch.setattr(
+            agent,
+            "list_windows",
+            lambda: [
+                {
+                    "session_name": "main",
+                    "window_index": 0,
+                    "window_name": "editor",
+                    "window_active": True,
+                    "session_attached": True,
+                }
+            ],
+        )
+        monkeypatch.setattr(agent, "capture", lambda *a, **k: "some output")
+        response = json.dumps({"commands": {"main:0": "yes"}}).encode()
+        monkeypatch.setattr(agent.urllib.request, "urlopen", _mock_urlopen(response_body=response))
+        sent = []
+        monkeypatch.setattr(agent, "send_keys", lambda pane_id, text: sent.append((pane_id, text)))
+
+        agent.push_once(fake_config)
+
+        assert sent == []
 
 
 class TestVerifyKey:

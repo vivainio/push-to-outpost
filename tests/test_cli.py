@@ -40,6 +40,33 @@ def fake_config():
     )
 
 
+class TestParseResponses:
+    def test_none_returns_default_list(self):
+        assert cli._parse_responses(None) == cli.DEFAULT_RESPONSES
+
+    def test_empty_string_disables(self):
+        assert cli._parse_responses("") == []
+
+    def test_splits_and_strips_comma_separated_list(self):
+        assert cli._parse_responses("yes, continue ,  commit and push") == [
+            "yes",
+            "continue",
+            "commit and push",
+        ]
+
+
+class TestCmdPush:
+    def test_passes_parsed_responses_through_to_push_once(self, monkeypatch, fake_config):
+        monkeypatch.setattr(cli.Config, "from_env", classmethod(lambda cls: fake_config))
+        mock_push_once = MagicMock(return_value=0)
+        monkeypatch.setattr(cli, "push_once", mock_push_once)
+        monkeypatch.setattr(cli, "push_sessions", lambda config: 0)
+
+        cli.cmd_push(argparse.Namespace(responses="yes,continue"))
+
+        mock_push_once.assert_called_once_with(fake_config, responses=["yes", "continue"])
+
+
 class TestCmdPushDoc:
     def test_infers_markdown_format_from_suffix(self, tmp_path, monkeypatch, fake_config):
         path = tmp_path / "notes.md"
