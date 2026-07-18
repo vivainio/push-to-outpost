@@ -168,6 +168,17 @@ class TestSendKeys:
             ["tmux", "send-keys", "-t", "main:0", "Enter"],
         ]
 
+    @pytest.mark.parametrize("digit", ["1", "2", "3"])
+    def test_sends_numbered_menu_choice_without_enter(self, monkeypatch, digit):
+        calls = []
+        monkeypatch.setattr(
+            agent.subprocess,
+            "run",
+            lambda cmd, **k: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0),
+        )
+        agent.send_keys("main:0", digit)
+        assert calls == [["tmux", "send-keys", "-l", "-t", "main:0", digit]]
+
 
 class TestRowHash:
     def test_deterministic(self):

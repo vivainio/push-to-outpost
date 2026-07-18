@@ -20,9 +20,10 @@ DEFAULT_TOWER_URL = "https://outpost.vivainio.workers.dev"
 # Canned responses the web UI can queue up per pane, delivered on the agent's
 # next poll and typed in via tmux send-keys. This is the CLI's own allowlist
 # (advertised to the server, then re-checked against on receipt) — the server
-# never gets to introduce a new one, only pick among these. "1"/"2"/"3" cover
-# numbered menu prompts; "Tab" is sent as a keypress, not literal text (see
-# agent.send_keys).
+# never gets to introduce a new one, only pick among these. "1"/"2"/"3" are
+# numbered-menu keypresses sent without a trailing Enter (they take effect
+# immediately); "Tab" is sent as a keypress too, but still followed by Enter
+# (see agent.send_keys / _NO_ENTER_RESPONSES).
 DEFAULT_RESPONSES = ["yes", "continue", "commit and push", "1", "2", "3", "Tab"]
 
 
