@@ -2,6 +2,7 @@ import argparse
 import base64
 import io
 import zipfile
+from contextlib import contextmanager
 from unittest.mock import MagicMock
 
 import pytest
@@ -84,6 +85,23 @@ class TestCmdRun:
             cli.cmd_run(argparse.Namespace(responses=""))
 
         assert capsys.readouterr().out.endswith("(ctrl-c to stop)\n.")
+
+    def test_replaces_previous_run(self, capsys, monkeypatch, fake_config):
+        @contextmanager
+        def fake_exclusive_run():
+            yield 1234
+
+        monkeypatch.setattr(cli.Config, "from_env", classmethod(lambda cls: fake_config))
+        monkeypatch.setattr(cli, "current_pane_id", lambda: None)
+        monkeypatch.setattr(cli, "exclusive_run", fake_exclusive_run)
+        monkeypatch.setattr(cli, "push_once", lambda *args, **kwargs: PushResult(0, []))
+        monkeypatch.setattr(cli, "push_sessions", lambda config: 0)
+        monkeypatch.setattr(cli.time, "sleep", MagicMock(side_effect=KeyboardInterrupt))
+
+        with pytest.raises(KeyboardInterrupt):
+            cli.cmd_run(argparse.Namespace(responses=""))
+
+        assert "stopped previous outpost run (pid 1234)" in capsys.readouterr().out
 
 
 class TestCmdPushDoc:

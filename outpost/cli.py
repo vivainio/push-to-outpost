@@ -15,6 +15,7 @@ import qrcode
 from outpost.agent import current_pane_id, fetch_encryption_salt, push_doc, push_once, verify_key
 from outpost.config import Config, save_credentials
 from outpost.crypto import derive_key, fingerprint
+from outpost.run_lock import exclusive_run
 from outpost.sessions import push_sessions
 
 DEFAULT_TOWER_URL = "https://outpost.vivainio.workers.dev"
@@ -182,26 +183,30 @@ def cmd_run(args: argparse.Namespace) -> None:
     config = Config.from_env()
     self_pane_id = current_pane_id()
     responses = _parse_responses(args.responses)
-    print(f"pushing to {config.tower_url} every {config.push_interval}s (ctrl-c to stop)")
-    if responses:
-        print(f"canned responses enabled: {', '.join(responses)}")
-    while True:
-        start = time.monotonic()
-        try:
-            result = push_once(config, exclude_pane_id=self_pane_id, responses=responses)
-            session_count = push_sessions(config)
-            for pane_id, text in result.applied:
-                print(f'sent "{text}" to {pane_id}')
-            if result.changed or session_count:
-                print(
-                    f"pushed {result.changed} changed window(s), {session_count} changed session(s)"
-                )
-            else:
-                print(".", end="", flush=True)
-        except urllib.error.URLError as exc:
-            print(f"push failed: {exc}", file=sys.stderr)
-        elapsed = time.monotonic() - start
-        time.sleep(max(0.0, config.push_interval - elapsed))
+    with exclusive_run() as replaced_pid:
+        if replaced_pid is not None:
+            print(f"stopped previous outpost run (pid {replaced_pid})")
+        print(f"pushing to {config.tower_url} every {config.push_interval}s (ctrl-c to stop)")
+        if responses:
+            print(f"canned responses enabled: {', '.join(responses)}")
+        while True:
+            start = time.monotonic()
+            try:
+                result = push_once(config, exclude_pane_id=self_pane_id, responses=responses)
+                session_count = push_sessions(config)
+                for pane_id, text in result.applied:
+                    print(f'sent "{text}" to {pane_id}')
+                if result.changed or session_count:
+                    print(
+                        f"pushed {result.changed} changed window(s), "
+                        f"{session_count} changed session(s)"
+                    )
+                else:
+                    print(".", end="", flush=True)
+            except urllib.error.URLError as exc:
+                print(f"push failed: {exc}", file=sys.stderr)
+            elapsed = time.monotonic() - start
+            time.sleep(max(0.0, config.push_interval - elapsed))
 
 
 def main() -> None:
