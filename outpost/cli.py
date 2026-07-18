@@ -20,8 +20,11 @@ DEFAULT_TOWER_URL = "https://outpost.vivainio.workers.dev"
 # Canned responses the web UI can queue up per pane, delivered on the agent's
 # next poll and typed in via tmux send-keys. This is the CLI's own allowlist
 # (advertised to the server, then re-checked against on receipt) — the server
-# never gets to introduce a new one, only pick among these.
-DEFAULT_RESPONSES = ["yes", "continue", "commit and push"]
+# never gets to introduce a new one, only pick among these. "1"/"2"/"3" are
+# numbered-menu keypresses sent without a trailing Enter (they take effect
+# immediately); "Tab" is sent as a keypress too, but still followed by Enter
+# (see agent.send_keys / _NO_ENTER_RESPONSES).
+DEFAULT_RESPONSES = ["yes", "continue", "commit and push", "1", "2", "3", "Tab"]
 
 
 def _parse_responses(raw: str | None) -> list[str]:
@@ -124,9 +127,11 @@ def cmd_qr(args: argparse.Namespace) -> None:
 def cmd_push(args: argparse.Namespace) -> None:
     config = Config.from_env()
     responses = _parse_responses(args.responses)
-    count = push_once(config, responses=responses)
+    result = push_once(config, responses=responses)
     session_count = push_sessions(config)
-    print(f"pushed {count} window(s) and {session_count} session(s) to {config.tower_url}")
+    for pane_id, text in result.applied:
+        print(f'sent "{text}" to {pane_id}')
+    print(f"pushed {result.changed} window(s) and {session_count} session(s) to {config.tower_url}")
 
 
 def cmd_push_doc(args: argparse.Namespace) -> None:
@@ -164,10 +169,14 @@ def cmd_run(args: argparse.Namespace) -> None:
     while True:
         start = time.monotonic()
         try:
-            count = push_once(config, exclude_pane_id=self_pane_id, responses=responses)
+            result = push_once(config, exclude_pane_id=self_pane_id, responses=responses)
             session_count = push_sessions(config)
-            if count or session_count:
-                print(f"pushed {count} changed window(s), {session_count} changed session(s)")
+            for pane_id, text in result.applied:
+                print(f'sent "{text}" to {pane_id}')
+            if result.changed or session_count:
+                print(
+                    f"pushed {result.changed} changed window(s), {session_count} changed session(s)"
+                )
             else:
                 print("no changes, skipped")
         except urllib.error.URLError as exc:

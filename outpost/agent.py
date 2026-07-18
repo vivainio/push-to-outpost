@@ -5,7 +5,7 @@ import os
 import subprocess
 import urllib.error
 import urllib.request
-from typing import TypedDict
+from typing import NamedTuple, TypedDict
 
 from outpost import crypto
 from outpost.config import Config
@@ -13,6 +13,7 @@ from outpost.config import Config
 
 class WindowInfo(TypedDict):
     session_name: str
+    window_id: str
     window_index: int
     window_name: str
     window_active: bool
@@ -29,7 +30,8 @@ def list_windows() -> list[WindowInfo]:
                 "list-windows",
                 "-a",
                 "-F",
-                "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}\t#{session_attached}",
+                "#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}"
+                "\t#{window_active}\t#{session_attached}",
             ],
             capture_output=True,
             text=True,
@@ -41,10 +43,13 @@ def list_windows() -> list[WindowInfo]:
         return []
     windows: list[WindowInfo] = []
     for line in result.stdout.strip().splitlines():
-        session_name, window_index, window_name, window_active, session_attached = line.split("\t")
+        session_name, window_id, window_index, window_name, window_active, session_attached = (
+            line.split("\t")
+        )
         windows.append(
             {
                 "session_name": session_name,
+                "window_id": window_id,
                 "window_index": int(window_index),
                 "window_name": window_name,
                 "window_active": window_active == "1",
@@ -54,8 +59,13 @@ def list_windows() -> list[WindowInfo]:
     return windows
 
 
-def capture(session_name: str, window_index: int, lines: int) -> str:
-    target = f"{session_name}:{window_index}"
+def capture(window_id: str, lines: int) -> str:
+    # tmux's window_id (e.g. "@12") is a stable, globally-unique target for
+    # the lifetime of the server — unlike "session:window_index", which tmux
+    # freely reassigns to a *different* window as soon as an earlier one
+    # closes (it fills the gap), which would otherwise let a stale index
+    # silently point capture/send at the wrong tab.
+    target = window_id
     try:
         result = subprocess.run(
             ["tmux", "capture-pane", "-e", "-p", "-t", target, "-S", f"-{lines}"],
@@ -68,39 +78,64 @@ def capture(session_name: str, window_index: int, lines: int) -> str:
     return result.stdout if result.returncode == 0 else ""
 
 
+# Numbered menu prompts (e.g. a CLI's "1. Yes  2. Yes and don't ask again
+# 3. No") select their option on the keypress itself — a trailing Enter
+# would advance past whatever the keypress just brought up.
+_NO_ENTER_RESPONSES = {"1", "2", "3"}
+
+
 def send_keys(pane_id: str, text: str) -> None:
-    """Types `text` into a tmux pane followed by Enter, as if the user had
-    typed it. `-l` sends it literally so shell/readline special characters in
-    a canned response aren't interpreted as key names."""
+    """Types `text` into a tmux pane, as if the user had typed it, then
+    presses Enter to submit it. `-l` sends it literally so shell/readline
+    special characters in a canned response aren't interpreted as key names.
+
+    `"Tab"` is a special case: it's a control keypress (cycling focus,
+    autocomplete), not literal text, so it's sent as a tmux key name instead
+    of `-l` text — a literal "tab" typed as text would not do what the
+    response is meant to do. Enter still follows it, same as any other
+    response.
+
+    Enter is skipped only for `_NO_ENTER_RESPONSES` — single-keypress menu
+    selections that take effect immediately, unlike Tab."""
     try:
-        subprocess.run(
-            ["tmux", "send-keys", "-l", "-t", pane_id, text],
-            capture_output=True,
-            timeout=5,
-        )
-        subprocess.run(
-            ["tmux", "send-keys", "-t", pane_id, "Enter"],
-            capture_output=True,
-            timeout=5,
-        )
+        if text == "Tab":
+            subprocess.run(
+                ["tmux", "send-keys", "-t", pane_id, "Tab"],
+                capture_output=True,
+                timeout=5,
+            )
+        else:
+            subprocess.run(
+                ["tmux", "send-keys", "-l", "-t", pane_id, text],
+                capture_output=True,
+                timeout=5,
+            )
+        if text not in _NO_ENTER_RESPONSES:
+            subprocess.run(
+                ["tmux", "send-keys", "-t", pane_id, "Enter"],
+                capture_output=True,
+                timeout=5,
+            )
     except FileNotFoundError:
         pass
 
 
 def current_pane_id() -> str | None:
-    """Returns the `session_name:window_index` of the tmux pane this process
-    is running in, or None if it's not running inside tmux at all. Used by
+    """Returns the tmux window_id (e.g. "@12") of the pane this process is
+    running in, or None if it's not running inside tmux at all. Used by
     `outpost run` to exclude its own pane from what it pushes — resolved via
     tmux's own `$TMUX_PANE` identity rather than by pattern-matching pane
     content, which is unreliable (any pane whose scrollback happens to
     contain the right substring — e.g. from viewing this file's source, or
-    from an unrelated earlier command — would be excluded too)."""
+    from an unrelated earlier command — would be excluded too). window_id
+    rather than session:window_index so the exclusion still matches even if
+    tab layout shifts between calls (see `capture`)."""
     tmux_pane = os.environ.get("TMUX_PANE")
     if not tmux_pane:
         return None
     try:
         result = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", tmux_pane, "#{session_name}:#{window_index}"],
+            ["tmux", "display-message", "-p", "-t", tmux_pane, "#{window_id}"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -124,9 +159,14 @@ def _row_hash(window_name: str, window_active: bool, session_attached: bool, con
 _last_hashes: dict[str, str] = {}
 
 
+class PushResult(NamedTuple):
+    changed: int
+    applied: list[tuple[str, str]]
+
+
 def push_once(
     config: Config, exclude_pane_id: str | None = None, responses: list[str] | None = None
-) -> int:
+) -> PushResult:
     """Captures and pushes all live tmux panes, except `exclude_pane_id` (if
     given) — used by `outpost run`'s loop to keep its own noisy pane out of
     the tower. One-shot `outpost push` passes None so it pushes everything,
@@ -137,7 +177,11 @@ def push_once(
     the server so it knows what buttons to show, and re-checked against
     here. That local re-check is what actually enforces the allowlist: even
     a compromised server response can't make this agent type something the
-    CLI wasn't configured to accept."""
+    CLI wasn't configured to accept.
+
+    Returns a `PushResult` — `applied` lists every (pane_id, text) actually
+    typed into a pane, so the caller can report it instead of silently
+    acting on it."""
     if not config.encryption_key:
         raise SystemExit(
             "No encryption password set. Run `outpost set-password` before pushing "
@@ -151,10 +195,10 @@ def push_once(
     current_hashes: dict[str, str] = {}
     changes = []
     for w in windows:
-        pane_id = f"{w['session_name']}:{w['window_index']}"
+        pane_id = w["window_id"]
         if pane_id == exclude_pane_id:
             continue
-        content = capture(w["session_name"], w["window_index"], config.capture_lines)
+        content = capture(w["window_id"], config.capture_lines)
         live.append(pane_id)
         # Hash the plaintext so change detection isn't defeated by encryption's
         # random per-push IV producing a different ciphertext each time.
@@ -179,7 +223,7 @@ def push_once(
     # is unchanged (that's exactly the state a pending "yes"/"continue" is
     # meant to unstick).
     if not changes and not responses and set(current_hashes) == set(_last_hashes):
-        return 0  # nothing changed, nothing closed — skip the network call
+        return PushResult(0, [])  # nothing changed, nothing closed — skip the network call
 
     body: dict = {"op": "push-tmux", "live": live, "changes": changes}
     if responses:
@@ -202,15 +246,17 @@ def push_once(
     except json.JSONDecodeError:
         resp_data = {}  # older server not yet returning JSON here — no commands to act on
 
+    applied: list[tuple[str, str]] = []
     if responses:
         allowed = set(responses)
         for pane_id, text in (resp_data.get("commands") or {}).items():
             if pane_id in live and text in allowed:
                 send_keys(pane_id, text)
+                applied.append((pane_id, text))
 
     _last_hashes.clear()
     _last_hashes.update(current_hashes)
-    return len(changes)
+    return PushResult(len(changes), applied)
 
 
 def verify_key(tower_url: str, push_secret: str) -> bool:

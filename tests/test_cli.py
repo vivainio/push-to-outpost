@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from outpost import cli
+from outpost.agent import PushResult
 from outpost.config import Config
 
 
@@ -58,7 +59,7 @@ class TestParseResponses:
 class TestCmdPush:
     def test_passes_parsed_responses_through_to_push_once(self, monkeypatch, fake_config):
         monkeypatch.setattr(cli.Config, "from_env", classmethod(lambda cls: fake_config))
-        mock_push_once = MagicMock(return_value=0)
+        mock_push_once = MagicMock(return_value=PushResult(0, []))
         monkeypatch.setattr(cli, "push_once", mock_push_once)
         monkeypatch.setattr(cli, "push_sessions", lambda config: 0)
 

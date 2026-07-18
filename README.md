@@ -60,10 +60,15 @@ outpost push-doc notes.md   # push a markdown/html/zip file separately from tmux
 to override the defaults.
 
 `outpost run --responses "yes,continue,commit and push"` advertises a fixed
-set of canned replies the web UI can send back to a pane (defaults to that
-same list if the flag is omitted; pass `--responses ""` to disable). The
-agent only ever types a response into a pane if it's a member of this list —
-even a compromised server can't make it send anything else.
+set of canned replies the web UI can send back to a pane (defaults to
+`yes,continue,commit and push,1,2,3,Tab` if the flag is omitted; pass
+`--responses ""` to disable). The agent only ever types a response into a
+pane if it's a member of this list — even a compromised server can't make it
+send anything else. `1`/`2`/`3` are numbered-menu keypresses with no
+trailing Enter (they take effect immediately); `Tab` is sent as an actual
+keypress rather than typed out literally, still followed by Enter. Every
+applied response is printed (`sent "1" to @3`) so
+it's visible whether one was actually delivered.
 
 ## License
 
