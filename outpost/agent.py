@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -187,7 +188,10 @@ class PushResult(NamedTuple):
 
 
 def push_once(
-    config: Config, exclude_pane_id: str | None = None, responses: list[str] | None = None
+    config: Config,
+    exclude_pane_id: str | None = None,
+    responses: list[str] | None = None,
+    verbose: bool = False,
 ) -> PushResult:
     """Captures and pushes all live tmux panes, except `exclude_pane_id` (if
     given) — used by `outpost run`'s loop to keep its own noisy pane out of
@@ -240,20 +244,46 @@ def push_once(
                 }
             )
 
+    if verbose:
+        print(
+            f"[tmux] discovered={len(windows)} live={len(live)} "
+            f"excluded={exclude_pane_id or 'none'}",
+            file=sys.stderr,
+        )
+        changed_ids = {change["pane_id"] for change in changes}
+        for w in windows:
+            window_id = w["window_id"]
+            state = (
+                "excluded"
+                if window_id == exclude_pane_id
+                else "changed"
+                if window_id in changed_ids
+                else "unchanged"
+            )
+            print(
+                f"[tmux] {window_id} {w['session_name']}:{w['window_index']} "
+                f"name={w['window_name']!r} active={w['window_active']} "
+                f"attached={w['session_attached']} state={state}",
+                file=sys.stderr,
+            )
+
     # When canned responses are enabled, the push is also how the agent polls
     # for queued commands — so it can't be skipped just because pane content
     # is unchanged (that's exactly the state a pending "yes"/"continue" is
     # meant to unstick).
     if not changes and not responses and set(current_hashes) == set(_last_hashes):
+        if verbose:
+            print("[tmux] network request skipped: no changes or polling", file=sys.stderr)
         return PushResult(0, [])  # nothing changed, nothing closed — skip the network call
 
     body: dict = {"op": "push-tmux", "live": live, "changes": changes}
     if responses:
         body["responses"] = responses
+    encoded_body = json.dumps(body).encode("utf-8")
 
     req = urllib.request.Request(
         f"{config.tower_url}/api/push",
-        data=json.dumps(body).encode("utf-8"),
+        data=encoded_body,
         headers={
             "Authorization": f"Bearer {config.push_secret}",
             "Content-Type": "application/json",
@@ -263,6 +293,13 @@ def push_once(
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
         raw = resp.read()
+        status = getattr(resp, "status", "unknown")
+    if verbose:
+        print(
+            f"[tmux] POST /api/push status={status} bytes={len(encoded_body)} "
+            f"live={len(live)} changes={len(changes)}",
+            file=sys.stderr,
+        )
     try:
         resp_data = json.loads(raw) if raw else {}
     except json.JSONDecodeError:
@@ -277,8 +314,18 @@ def push_once(
                 error = send_keys(pane_id, text)
                 if error:
                     failed.append((pane_id, text, error))
+                    if verbose:
+                        print(
+                            f"[tmux] command {text!r} target={pane_id} failed: {error}",
+                            file=sys.stderr,
+                        )
                 else:
                     applied.append((pane_id, text))
+                    if verbose:
+                        print(
+                            f"[tmux] command {text!r} target={pane_id} delivered",
+                            file=sys.stderr,
+                        )
 
     _last_hashes.clear()
     _last_hashes.update(current_hashes)

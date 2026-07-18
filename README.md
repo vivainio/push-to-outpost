@@ -60,6 +60,11 @@ outpost push-doc notes/     # zip a directory on the fly and push it as one doc
 `SESSION_MAX_AGE_MINUTES` (default 60) can be set as environment variables
 to override the defaults.
 
+Add `-v`/`--verbose` to `outpost push` or `outpost run` to print diagnostic
+metadata for each cycle: discovered, excluded, changed, and unchanged tmux
+windows; session transcript decisions; request status; and canned-response
+delivery results. Terminal and transcript contents are never printed.
+
 `outpost run --responses "yes,continue,commit and push"` advertises a fixed
 set of canned replies the web UI can send back to a pane (defaults to
 `yes,continue,commit and push,1,2,3,y,p,esc,Tab` if the flag is omitted; pass

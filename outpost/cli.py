@@ -151,8 +151,9 @@ def cmd_qr(args: argparse.Namespace) -> None:
 def cmd_push(args: argparse.Namespace) -> None:
     config = Config.from_env()
     responses = _parse_responses(args.responses)
-    result = push_once(config, responses=responses)
-    session_count = push_sessions(config)
+    verbose = getattr(args, "verbose", False)
+    result = push_once(config, responses=responses, verbose=verbose)
+    session_count = push_sessions(config, verbose=verbose)
     for pane_id, text in result.applied:
         print(f'sent "{text}" to {pane_id}')
     for pane_id, text, error in result.failed:
@@ -196,6 +197,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     config = Config.from_env()
     self_pane_id = current_pane_id()
     responses = _parse_responses(args.responses)
+    verbose = getattr(args, "verbose", False)
     with exclusive_run() as replaced_pid:
         if replaced_pid is not None:
             print(f"stopped previous outpost run (pid {replaced_pid})")
@@ -205,8 +207,13 @@ def cmd_run(args: argparse.Namespace) -> None:
         while True:
             start = time.monotonic()
             try:
-                result = push_once(config, exclude_pane_id=self_pane_id, responses=responses)
-                session_count = push_sessions(config)
+                result = push_once(
+                    config,
+                    exclude_pane_id=self_pane_id,
+                    responses=responses,
+                    verbose=verbose,
+                )
+                session_count = push_sessions(config, verbose=verbose)
                 for pane_id, text in result.applied:
                     print(f'sent "{text}" to {pane_id}')
                 for pane_id, text, error in result.failed:
@@ -252,10 +259,12 @@ def main() -> None:
 
     push_parser = sub.add_parser("push", help="Push a single snapshot and exit")
     push_parser.add_argument("--responses", default=None, help=responses_help)
+    push_parser.add_argument("-v", "--verbose", action="store_true", help="Show push diagnostics")
     push_parser.set_defaults(func=cmd_push)
 
     run_parser = sub.add_parser("run", help="Push snapshots on a loop until stopped")
     run_parser.add_argument("--responses", default=None, help=responses_help)
+    run_parser.add_argument("-v", "--verbose", action="store_true", help="Show push diagnostics")
     run_parser.set_defaults(func=cmd_run)
 
     push_doc_parser = sub.add_parser(

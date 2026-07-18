@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -449,9 +450,14 @@ def _content_hash(content: str) -> str:
 _last_hashes: dict[str, str] = {}
 
 
-def push_sessions(config: Config) -> int:
+def push_sessions(config: Config, verbose: bool = False) -> int:
     """Render and push changed Claude Code and Codex CLI transcripts."""
     sessions = discover_sessions(config.session_max_age)
+    if verbose:
+        print(
+            f"[sessions] discovered={len(sessions)} max_age={config.session_max_age}s",
+            file=sys.stderr,
+        )
 
     def cache_key(session: SessionFile) -> str:
         # Keep Claude's existing identifiers stable; namespace Codex to avoid
@@ -471,6 +477,12 @@ def push_sessions(config: Config) -> int:
         title, content = renderer(session["path"])
         content_hash = _content_hash(content)
         if _last_hashes.get(key) == content_hash:
+            if verbose:
+                print(
+                    f"[sessions] {session['provider']} {session['session_id']} "
+                    f"title={title!r} state=unchanged",
+                    file=sys.stderr,
+                )
             continue
         push_doc(
             config,
@@ -485,4 +497,10 @@ def push_sessions(config: Config) -> int:
         )
         _last_hashes[key] = content_hash
         pushed += 1
+        if verbose:
+            print(
+                f"[sessions] {session['provider']} {session['session_id']} "
+                f"title={title!r} state=pushed",
+                file=sys.stderr,
+            )
     return pushed

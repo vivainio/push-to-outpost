@@ -2,7 +2,7 @@ import argparse
 import base64
 import io
 import zipfile
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from unittest.mock import MagicMock
 
 import pytest
@@ -64,11 +64,13 @@ class TestCmdPush:
         monkeypatch.setattr(cli.Config, "from_env", classmethod(lambda cls: fake_config))
         mock_push_once = MagicMock(return_value=PushResult(0, []))
         monkeypatch.setattr(cli, "push_once", mock_push_once)
-        monkeypatch.setattr(cli, "push_sessions", lambda config: 0)
+        monkeypatch.setattr(cli, "push_sessions", lambda config, **kwargs: 0)
 
         cli.cmd_push(argparse.Namespace(responses="yes,continue"))
 
-        mock_push_once.assert_called_once_with(fake_config, responses=["yes", "continue"])
+        mock_push_once.assert_called_once_with(
+            fake_config, responses=["yes", "continue"], verbose=False
+        )
 
 
 class TestCmdRun:
@@ -77,8 +79,9 @@ class TestCmdRun:
     ):
         monkeypatch.setattr(cli.Config, "from_env", classmethod(lambda cls: fake_config))
         monkeypatch.setattr(cli, "current_pane_id", lambda: "@0")
+        monkeypatch.setattr(cli, "exclusive_run", lambda: nullcontext())
         monkeypatch.setattr(cli, "push_once", lambda *args, **kwargs: PushResult(0, []))
-        monkeypatch.setattr(cli, "push_sessions", lambda config: 0)
+        monkeypatch.setattr(cli, "push_sessions", lambda config, **kwargs: 0)
         monkeypatch.setattr(cli.time, "sleep", MagicMock(side_effect=KeyboardInterrupt))
 
         with pytest.raises(KeyboardInterrupt):
@@ -95,7 +98,7 @@ class TestCmdRun:
         monkeypatch.setattr(cli, "current_pane_id", lambda: None)
         monkeypatch.setattr(cli, "exclusive_run", fake_exclusive_run)
         monkeypatch.setattr(cli, "push_once", lambda *args, **kwargs: PushResult(0, []))
-        monkeypatch.setattr(cli, "push_sessions", lambda config: 0)
+        monkeypatch.setattr(cli, "push_sessions", lambda config, **kwargs: 0)
         monkeypatch.setattr(cli.time, "sleep", MagicMock(side_effect=KeyboardInterrupt))
 
         with pytest.raises(KeyboardInterrupt):

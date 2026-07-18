@@ -405,6 +405,44 @@ class TestPushOnce:
 
         mock_urlopen.assert_called_once()
 
+    def test_verbose_reports_window_metadata_without_content(
+        self, monkeypatch, fake_config, capsys
+    ):
+        monkeypatch.setattr(
+            agent,
+            "list_windows",
+            lambda: [
+                {
+                    "session_name": "push-to-outpost",
+                    "window_id": "@34",
+                    "window_index": 1,
+                    "window_name": "codex",
+                    "window_active": True,
+                    "session_attached": True,
+                },
+                {
+                    "session_name": "push-to-outpost",
+                    "window_id": "@39",
+                    "window_index": 2,
+                    "window_name": "runner",
+                    "window_active": False,
+                    "session_attached": True,
+                },
+            ],
+        )
+        monkeypatch.setattr(agent, "capture", lambda *a, **k: "secret terminal content")
+        monkeypatch.setattr(agent.urllib.request, "urlopen", _mock_urlopen())
+
+        agent.push_once(fake_config, exclude_pane_id="@39", verbose=True)
+
+        diagnostics = capsys.readouterr().err
+        assert "[tmux] discovered=2 live=1 excluded=@39" in diagnostics
+        assert "@34 push-to-outpost:1" in diagnostics
+        assert "@39 push-to-outpost:2" in diagnostics
+        assert "state=excluded" in diagnostics
+        assert "POST /api/push status=200" in diagnostics
+        assert "secret terminal content" not in diagnostics
+
     def test_sends_keys_for_allowed_queued_command(self, monkeypatch, fake_config):
         monkeypatch.setattr(
             agent,
