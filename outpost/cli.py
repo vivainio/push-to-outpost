@@ -174,7 +174,9 @@ def cmd_run(args: argparse.Namespace) -> None:
             for pane_id, text in result.applied:
                 print(f'sent "{text}" to {pane_id}')
             if result.changed or session_count:
-                print(f"pushed {result.changed} changed window(s), {session_count} changed session(s)")
+                print(
+                    f"pushed {result.changed} changed window(s), {session_count} changed session(s)"
+                )
             else:
                 print("no changes, skipped")
         except urllib.error.URLError as exc:
