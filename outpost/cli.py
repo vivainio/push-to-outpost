@@ -26,7 +26,8 @@ DEFAULT_TOWER_URL = "https://outpost.vivainio.workers.dev"
 # (advertised to the server, then re-checked against on receipt) — the server
 # never gets to introduce a new one, only pick among these. Single-key canned
 # commands are sent without a trailing Enter (they take effect immediately);
-# "Tab" is sent as a keypress too, but still followed by Enter (see
+# "Tab" and "enter" are sent as keypresses too, with Tab still followed by
+# Enter (see
 # agent.send_keys / _NO_ENTER_RESPONSES).
 DEFAULT_RESPONSES = [
     "yes",
@@ -39,6 +40,7 @@ DEFAULT_RESPONSES = [
     "p",
     "esc",
     "Tab",
+    "enter",
 ]
 
 # A canned response usually wakes an agent that was blocked on a prompt. Push

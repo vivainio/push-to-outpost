@@ -219,6 +219,16 @@ class TestSendKeys:
         agent.send_keys("main:0", "esc")
         assert calls == [["tmux", "send-keys", "-t", "main:0", "Escape"]]
 
+    def test_sends_enter_as_keypress_without_an_extra_enter(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            agent.subprocess,
+            "run",
+            lambda cmd, **k: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0),
+        )
+        agent.send_keys("main:0", "enter")
+        assert calls == [["tmux", "send-keys", "-t", "main:0", "Enter"]]
+
 
 class TestRowHash:
     def test_deterministic(self):

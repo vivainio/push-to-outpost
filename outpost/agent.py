@@ -82,7 +82,7 @@ def capture(window_id: str, lines: int) -> str:
 
 # Menu prompts select these options on the keypress itself — a trailing Enter
 # would advance past whatever the keypress just brought up.
-_NO_ENTER_RESPONSES = {"1", "2", "3", "y", "p", "esc"}
+_NO_ENTER_RESPONSES = {"1", "2", "3", "y", "p", "esc", "enter"}
 
 # Codex's TUI treats a rapid stream of unbracketed characters as a paste. If
 # Enter immediately follows literal text, it can be absorbed into that paste
@@ -96,9 +96,9 @@ def send_keys(pane_id: str, text: str) -> str | None:
     presses Enter to submit it. `-l` sends it literally so shell/readline
     special characters in a canned response aren't interpreted as key names.
 
-    `"Tab"` and `"esc"` are control keypresses, so they're sent as tmux key
-    names instead of `-l` text. Enter still follows Tab, while esc is an
-    immediate keypress and does not need one.
+    `"Tab"`, `"esc"`, and `"enter"` are control keypresses, so they're sent
+    as tmux key names instead of `-l` text. Enter still follows Tab, while
+    esc and enter are immediate keypresses and do not need another one.
 
     Enter is skipped only for `_NO_ENTER_RESPONSES` — single-keypress menu
     selections that take effect immediately, unlike Tab.
@@ -115,8 +115,8 @@ def send_keys(pane_id: str, text: str) -> str | None:
         return f"{action} failed{suffix}"
 
     try:
-        if text in {"Tab", "esc"}:
-            key = "Escape" if text == "esc" else text
+        if text in {"Tab", "esc", "enter"}:
+            key = {"esc": "Escape", "enter": "Enter"}.get(text, text)
             error = run_tmux(
                 ["tmux", "send-keys", "-t", pane_id, key],
                 f"sending {key}",
